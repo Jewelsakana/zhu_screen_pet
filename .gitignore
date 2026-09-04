@@ -1,0 +1,10 @@
+/build/
+/build-release/
+/docs/
+/.vs/
+*.user
+*.suo
+*.vcxproj*
+/$result
+/test-now.txt
+/*_qttest.txt

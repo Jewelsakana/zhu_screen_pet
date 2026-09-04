@@ -1,0 +1,45 @@
+{
+    "version": 1,
+    "active_profile": "mock-local",
+    "profiles": [
+        {
+            "id": "mock-local",
+            "provider_type": "mock",
+            "display_name": "Mock（离线）",
+            "base_url": "",
+            "model": "",
+            "credential_service": "",
+            "credential_account": "",
+            "mock_reply": "你好，我已经收到你的消息了。",
+            "timeout_ms": 30000,
+            "max_retries": 3,
+            "retry_base_delay_ms": 1000
+        },
+        {
+            "id": "deepseek-chat",
+            "provider_type": "deepseek",
+            "display_name": "DeepSeek Chat",
+            "base_url": "https://api.deepseek.com",
+            "model": "deepseek-chat",
+            "credential_service": "zhu_screen_pet",
+            "credential_account": "deepseek-api-key",
+            "mock_reply": "",
+            "timeout_ms": 30000,
+            "max_retries": 3,
+            "retry_base_delay_ms": 1000
+        },
+        {
+            "id": "openai-default",
+            "provider_type": "openai-compatible",
+            "display_name": "OpenAI",
+            "base_url": "https://api.openai.com/v1",
+            "model": "gpt-4o-mini",
+            "credential_service": "zhu_screen_pet",
+            "credential_account": "openai-api-key",
+            "mock_reply": "",
+            "timeout_ms": 30000,
+            "max_retries": 3,
+            "retry_base_delay_ms": 1000
+        }
+    ]
+}
