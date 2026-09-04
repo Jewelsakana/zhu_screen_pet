@@ -5,13 +5,16 @@
 #include "model/ModelProviderConfig.h"
 
 class QComboBox;
+class QCheckBox;
 class QLineEdit;
 class QSpinBox;
 class QLabel;
+class QPushButton;
 
 namespace zhu_screen_pet {
 
 class SettingsController;
+class ScreenCapture;
 
 /** 设置窗口：编辑模型、用户称呼和记忆限制；核心人设由配置文件管理。 */
 class SettingsDialog final : public QDialog
@@ -19,7 +22,8 @@ class SettingsDialog final : public QDialog
     Q_OBJECT
 
 public:
-    explicit SettingsDialog(SettingsController* controller, QWidget* parent = nullptr);
+    explicit SettingsDialog(SettingsController* controller, QWidget* parent = nullptr,
+                            ScreenCapture* screenCapture = nullptr);
 
 private slots:
     void loadSelectedProfile(int index);
@@ -50,8 +54,16 @@ private:
     QSpinBox* longTermLimit_ = nullptr;
     QSpinBox* contextTokens_ = nullptr;
     QSpinBox* bubbleDurationSeconds_ = nullptr;
+    QCheckBox* screenCaptureEnabled_ = nullptr;
+    QSpinBox* screenCaptureIntervalSeconds_ = nullptr;
+    QCheckBox* captureOnChat_ = nullptr;
+    QComboBox* captureImageFormat_ = nullptr;
+    QSpinBox* captureMaxWidth_ = nullptr;
+    QSpinBox* captureQuality_ = nullptr;
+    QPushButton* captureTestButton_ = nullptr;
     QLabel* status_ = nullptr;
     ModelProviderConfig editingModel_;
+    ScreenCapture* screenCapture_ = nullptr;
 };
 
 } // namespace zhu_screen_pet

@@ -31,6 +31,7 @@ class ErrorCenter;
 class HoverRevealController;
 class ReplyBubbleWindow;
 class SettingsController;
+class ScreenCapture;
 class WindowAttachmentManager;
 
 /** 透明桌宠主窗口，负责协调附属 UI；聊天、会话和设置业务仍由应用控制器处理。 */
@@ -46,6 +47,7 @@ public:
     void setErrorCenter(ErrorCenter* errorCenter);
     void setConversationController(ConversationController* controller);
     void setSettingsController(SettingsController* controller);
+    void setCaptureDirectory(const QString& directory);
     void setModelErrorMessages(const QHash<QString, QString>& messages);
     void setConversation(const QString& conversationId,
                          const QVector<ConversationMessage>& messages);
@@ -118,6 +120,8 @@ private:
     HoverRevealController* inputReveal_ = nullptr;
     WindowAttachmentManager* attachments_ = nullptr;
     bool repositioningConversationChain_ = false;
+    ScreenCapture* screenCapture_ = nullptr;
+    QString captureDirectory_;
 };
 
 } // namespace zhu_screen_pet

@@ -1,6 +1,7 @@
 #include "ui/SettingsDialog.h"
 
 #include <QComboBox>
+#include <QCheckBox>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -12,6 +13,7 @@
 #include <QVBoxLayout>
 
 #include "app/SettingsController.h"
+#include "infrastructure/ScreenCapture.h"
 #include "app/ErrorCenter.h"
 
 namespace zhu_screen_pet {
@@ -25,12 +27,13 @@ QSpinBox* spin(QWidget* parent, int min, int max)
 }
 }
 
-SettingsDialog::SettingsDialog(SettingsController* controller, QWidget* parent)
-    : QDialog(parent), controller_(controller)
+SettingsDialog::SettingsDialog(SettingsController* controller, QWidget* parent,
+                               ScreenCapture* screenCapture)
+    : QDialog(parent), controller_(controller), screenCapture_(screenCapture)
 {
     setWindowTitle(QStringLiteral("设置"));
     setObjectName(QStringLiteral("settingsDialog"));
-    resize(560, 680);
+    resize(560, 780);
     setStyleSheet(QStringLiteral(
         "QDialog#settingsDialog{background:#fffaf0;color:#26375d;}"
         "QGroupBox{background:#fffdf8;border:1px solid #dfd3bd;border-radius:12px;"
@@ -110,6 +113,45 @@ SettingsDialog::SettingsDialog(SettingsController* controller, QWidget* parent)
     bubbleDurationSeconds_->setSuffix(QStringLiteral(" 秒"));
     uiForm->addRow(QStringLiteral("回复气泡显示时间"), bubbleDurationSeconds_);
 
+    auto* captureBox = new QGroupBox(QStringLiteral("屏幕截图"), this);
+    auto* captureForm = new QFormLayout(captureBox);
+    screenCaptureEnabled_ = new QCheckBox(QStringLiteral("启用屏幕截图"), captureBox);
+    screenCaptureEnabled_->setObjectName(QStringLiteral("settingsScreenCaptureEnabled"));
+    screenCaptureIntervalSeconds_ = spin(captureBox, 1, 600);
+    screenCaptureIntervalSeconds_->setSuffix(QStringLiteral(" 秒"));
+    screenCaptureIntervalSeconds_->setObjectName(QStringLiteral("settingsScreenCaptureInterval"));
+    captureOnChat_ = new QCheckBox(QStringLiteral("发送对话时额外截图一次"), captureBox);
+    captureOnChat_->setObjectName(QStringLiteral("settingsCaptureOnChat"));
+    captureImageFormat_ = new QComboBox(captureBox);
+    captureImageFormat_->addItem(QStringLiteral("JPEG"), QStringLiteral("jpeg"));
+    captureImageFormat_->addItem(QStringLiteral("WebP（不可用时回退 JPEG）"), QStringLiteral("webp"));
+    captureImageFormat_->setObjectName(QStringLiteral("settingsCaptureImageFormat"));
+    captureMaxWidth_ = spin(captureBox, 320, 8192);
+    captureMaxWidth_->setSuffix(QStringLiteral(" px"));
+    captureMaxWidth_->setObjectName(QStringLiteral("settingsCaptureMaxWidth"));
+    captureQuality_ = spin(captureBox, 1, 100);
+    captureQuality_->setSuffix(QStringLiteral("%"));
+    captureQuality_->setObjectName(QStringLiteral("settingsCaptureQuality"));
+    captureForm->addRow(screenCaptureEnabled_);
+    captureForm->addRow(QStringLiteral("自动截图间隔"), screenCaptureIntervalSeconds_);
+    captureForm->addRow(captureOnChat_);
+    captureForm->addRow(QStringLiteral("图像格式"), captureImageFormat_);
+    captureForm->addRow(QStringLiteral("最大图像宽度"), captureMaxWidth_);
+    captureForm->addRow(QStringLiteral("压缩质量"), captureQuality_);
+    captureTestButton_ = new QPushButton(QStringLiteral("立即截图测试"), captureBox);
+    captureTestButton_->setObjectName(QStringLiteral("settingsCaptureTestButton"));
+    captureTestButton_->setEnabled(screenCapture_ != nullptr);
+    captureForm->addRow(captureTestButton_);
+    connect(captureTestButton_, &QPushButton::clicked, this, [this]() {
+        if (screenCapture_ == nullptr) return;
+        QString error;
+        if (screenCapture_->captureNow(&error)) {
+            status_->setText(QStringLiteral("截图成功，已保存到 captures 目录"));
+        } else {
+            status_->setText(QStringLiteral("截图失败：%1").arg(error));
+        }
+    });
+
     auto* buttons = new QHBoxLayout();
     auto* test = new QPushButton(QStringLiteral("测试连接"), this);
     auto* apply = new QPushButton(QStringLiteral("应用"), this);
@@ -125,6 +167,7 @@ SettingsDialog::SettingsDialog(SettingsController* controller, QWidget* parent)
     root->addWidget(personaBox);
     root->addWidget(memoryBox);
     root->addWidget(uiBox);
+    root->addWidget(captureBox);
     root->addLayout(buttons);
     connect(profile_, qOverload<int>(&QComboBox::currentIndexChanged),
             this, &SettingsDialog::loadSelectedProfile);
@@ -163,6 +206,13 @@ void SettingsDialog::populate()
     longTermLimit_->setValue(limits.longTermMemoryLimit);
     contextTokens_->setValue(limits.maxContextTokens);
     bubbleDurationSeconds_->setValue(controller_->uiConfig().replyBubbleDurationMs / 1000);
+    const UiConfig ui = controller_->uiConfig();
+    screenCaptureEnabled_->setChecked(ui.screenCaptureEnabled);
+    screenCaptureIntervalSeconds_->setValue(ui.screenCaptureIntervalMs / 1000);
+    captureOnChat_->setChecked(ui.captureOnChat);
+    captureImageFormat_->setCurrentIndex(captureImageFormat_->findData(ui.captureImageFormat));
+    captureMaxWidth_->setValue(ui.captureMaxWidth);
+    captureQuality_->setValue(ui.captureQuality);
 }
 
 void SettingsDialog::loadSelectedProfile(int index)
@@ -224,6 +274,12 @@ void SettingsDialog::applySettings()
     limits.longTermMemoryLimit = longTermLimit_->value(); limits.maxContextTokens = contextTokens_->value();
     UiConfig ui = controller_->uiConfig();
     ui.replyBubbleDurationMs = bubbleDurationSeconds_->value() * 1000;
+    ui.screenCaptureEnabled = screenCaptureEnabled_->isChecked();
+    ui.screenCaptureIntervalMs = screenCaptureIntervalSeconds_->value() * 1000;
+    ui.captureOnChat = captureOnChat_->isChecked();
+    ui.captureImageFormat = captureImageFormat_->currentData().toString();
+    ui.captureMaxWidth = captureMaxWidth_->value();
+    ui.captureQuality = captureQuality_->value();
     AppError error;
     if (!controller_->apply(model, persona, limits, ui, apiKey_->text(), &error)) {
         if (error.code == AppErrorCode::Busy) {

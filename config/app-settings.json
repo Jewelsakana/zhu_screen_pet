@@ -23,6 +23,12 @@
     "ui": {
         "app_icon_path": "",
         "conversation_avatar_path": "",
+        "screen_capture_enabled": false,
+        "screen_capture_interval_ms": 5000,
+        "capture_on_chat": false,
+        "capture_image_format": "jpeg",
+        "capture_max_width": 1280,
+        "capture_quality": 75,
         "reply_bubble_duration_ms": 15000,
         "hover_hide_delay_ms": 600,
         "pet_avatar_path": "",

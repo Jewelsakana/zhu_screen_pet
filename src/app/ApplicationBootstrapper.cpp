@@ -164,6 +164,7 @@ bool ApplicationBootstrapper::initialize(AppError* error)
             &errorCenter_, &ErrorCenter::report);
 
     window_ = std::make_unique<MainWindow>();
+    window_->setCaptureDirectory(paths_.captureDirectory());
     window_->setModelErrorMessages(modelErrorMessages_);
     window_->setErrorCenter(&errorCenter_);
     window_->setChatController(chatController_.get());

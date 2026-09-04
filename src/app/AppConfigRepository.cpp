@@ -104,6 +104,27 @@ bool AppConfigRepository::load(PersonaConfig* persona,
         loadedUi.petAvatarPath = uiObject.value(QStringLiteral("pet_avatar_path")).toString();
         loadedUi.conversationAvatarPath = uiObject.value(
             QStringLiteral("conversation_avatar_path")).toString();
+        if (uiObject.contains(QStringLiteral("screen_capture_enabled"))) {
+            loadedUi.screenCaptureEnabled = uiObject.value(
+                QStringLiteral("screen_capture_enabled")).toBool();
+        }
+        if (uiObject.contains(QStringLiteral("screen_capture_interval_ms"))) {
+            loadedUi.screenCaptureIntervalMs = uiObject.value(
+                QStringLiteral("screen_capture_interval_ms")).toInt();
+        }
+        if (uiObject.contains(QStringLiteral("capture_on_chat"))) {
+            loadedUi.captureOnChat = uiObject.value(QStringLiteral("capture_on_chat")).toBool();
+        }
+        if (uiObject.contains(QStringLiteral("capture_image_format"))) {
+            loadedUi.captureImageFormat = uiObject.value(
+                QStringLiteral("capture_image_format")).toString();
+        }
+        if (uiObject.contains(QStringLiteral("capture_max_width"))) {
+            loadedUi.captureMaxWidth = uiObject.value(QStringLiteral("capture_max_width")).toInt();
+        }
+        if (uiObject.contains(QStringLiteral("capture_quality"))) {
+            loadedUi.captureQuality = uiObject.value(QStringLiteral("capture_quality")).toInt();
+        }
         if (uiObject.contains(QStringLiteral("reply_bubble_duration_ms"))) {
             loadedUi.replyBubbleDurationMs = uiObject.value(
                 QStringLiteral("reply_bubble_duration_ms")).toInt();
@@ -171,6 +192,13 @@ bool AppConfigRepository::save(const PersonaConfig& source, const MemoryLimits& 
         uiObject.insert(QStringLiteral("pet_avatar_path"), normalizedUi.petAvatarPath);
         uiObject.insert(QStringLiteral("conversation_avatar_path"),
                         normalizedUi.conversationAvatarPath);
+        uiObject.insert(QStringLiteral("screen_capture_enabled"), normalizedUi.screenCaptureEnabled);
+        uiObject.insert(QStringLiteral("screen_capture_interval_ms"),
+                        normalizedUi.screenCaptureIntervalMs);
+        uiObject.insert(QStringLiteral("capture_on_chat"), normalizedUi.captureOnChat);
+        uiObject.insert(QStringLiteral("capture_image_format"), normalizedUi.captureImageFormat);
+        uiObject.insert(QStringLiteral("capture_max_width"), normalizedUi.captureMaxWidth);
+        uiObject.insert(QStringLiteral("capture_quality"), normalizedUi.captureQuality);
         uiObject.insert(QStringLiteral("reply_bubble_duration_ms"),
                         normalizedUi.replyBubbleDurationMs);
         uiObject.insert(QStringLiteral("hover_hide_delay_ms"), normalizedUi.hoverHideDelayMs);

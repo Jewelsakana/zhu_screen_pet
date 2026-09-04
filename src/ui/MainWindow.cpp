@@ -21,6 +21,8 @@
 #include "app/ErrorCenter.h"
 #include "app/SettingsController.h"
 #include "infrastructure/DesktopWindowPolicy.h"
+#include "infrastructure/ImageCompressor.h"
+#include "infrastructure/ScreenCapture.h"
 #include "infrastructure/WindowAttachmentManager.h"
 #include "infrastructure/WindowPlacement.h"
 #include "ui/ActionPanel.h"
@@ -74,6 +76,10 @@ MainWindow::MainWindow(QWidget* parent)
     layout->addWidget(petVisual_, 1);
     layout->addWidget(stateLabel_);
     setCentralWidget(surface);
+    screenCapture_ = new ScreenCapture(this);
+    connect(screenCapture_, &ScreenCapture::captureFailed, this, [this](const QString& message) {
+        Q_UNUSED(message);
+    });
     createOverlayWindows();
 }
 
@@ -237,6 +243,11 @@ void MainWindow::setSettingsController(SettingsController* controller)
     }
 }
 
+void MainWindow::setCaptureDirectory(const QString& directory)
+{
+    captureDirectory_ = directory;
+}
+
 void MainWindow::setModelErrorMessages(const QHash<QString, QString>& messages)
 {
     errorPresenter_ = ModelErrorPresenter(messages);
@@ -281,6 +292,15 @@ void MainWindow::applyUiConfig(const UiConfig& config)
         conversationWindow_->setConversationAvatarPath(
             resolveConfiguredAssetPath(uiConfig_.conversationAvatarPath));
     }
+    ImageCompressionOptions compression;
+    compression.format = uiConfig_.captureImageFormat;
+    compression.maxWidth = uiConfig_.captureMaxWidth;
+    compression.quality = uiConfig_.captureQuality;
+    screenCapture_->configure(uiConfig_.screenCaptureEnabled,
+                              uiConfig_.screenCaptureIntervalMs,
+                              captureDirectory_, compression);
+    if (uiConfig_.screenCaptureEnabled) screenCapture_->start();
+    else screenCapture_->stop();
 }
 
 void MainWindow::sendCurrentMessage()
@@ -288,6 +308,9 @@ void MainWindow::sendCurrentMessage()
     if (chatController_ == nullptr || !currentRequestId_.isEmpty()) return;
     const QString text = inputPanel_->text();
     if (text.isEmpty() || conversationId_.isEmpty()) return;
+    if (uiConfig_.screenCaptureEnabled && uiConfig_.captureOnChat) {
+        screenCapture_->captureNow();
+    }
     ChatOptions options;
     options.stream = true;
     const QString requestId = chatController_->sendMessage(conversationId_, text, options);
@@ -392,7 +415,7 @@ void MainWindow::onCurrentConversationChanged(
 void MainWindow::openSettings()
 {
     if (settingsController_ == nullptr) return;
-    SettingsDialog dialog(settingsController_, this);
+    SettingsDialog dialog(settingsController_, this, screenCapture_);
     dialog.exec();
 }
 

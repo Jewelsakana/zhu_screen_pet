@@ -14,6 +14,12 @@ struct UiConfig
     QString appIconPath;
     QString petAvatarPath;
     QString conversationAvatarPath;
+    bool screenCaptureEnabled = false;
+    int screenCaptureIntervalMs = 5000;
+    bool captureOnChat = false;
+    QString captureImageFormat = QStringLiteral("jpeg");
+    int captureMaxWidth = 1280;
+    int captureQuality = 75;
 
     UiConfig normalized() const;
     bool validate(QString* errorMessage = nullptr) const;

@@ -25,6 +25,7 @@
 #include <QTimer>
 #include <QSpinBox>
 #include <QElapsedTimer>
+#include <QImage>
 #include <QThread>
 #include <QUuid>
 
@@ -46,6 +47,8 @@
 #include "infrastructure/WindowAttachmentManager.h"
 #include "infrastructure/DesktopWindowPolicy.h"
 #include "infrastructure/HttpClient.h"
+#include "infrastructure/ImageCompressor.h"
+#include "infrastructure/ScreenCapture.h"
 #include "infrastructure/Logger.h"
 #include "infrastructure/SecretStore.h"
 #include "model/MockChatProvider.h"
@@ -112,6 +115,7 @@ private slots:
     {
         qRegisterMetaType<ChatResult>("ChatResult");
         qRegisterMetaType<HttpResponse>("HttpResponse");
+        qRegisterMetaType<CapturedImage>("CapturedImage");
     }
 
     void applicationWindowHasExpectedTitle()
@@ -306,6 +310,59 @@ private slots:
         QVERIFY(ui.appIconPath.isEmpty());
         QVERIFY(ui.petAvatarPath.isEmpty());
         QVERIFY(ui.conversationAvatarPath.isEmpty());
+        QVERIFY(!ui.screenCaptureEnabled);
+        QCOMPARE(ui.screenCaptureIntervalMs, 5000);
+        QVERIFY(!ui.captureOnChat);
+        QCOMPARE(ui.captureImageFormat, QStringLiteral("jpeg"));
+        QCOMPARE(ui.captureMaxWidth, 1280);
+        QCOMPARE(ui.captureQuality, 75);
+    }
+
+    void imageCompressorScalesAndEncodesJpeg()
+    {
+        QImage source(2400, 1200, QImage::Format_RGB32);
+        source.fill(Qt::blue);
+        ImageCompressionOptions options;
+        options.format = QStringLiteral("jpeg");
+        options.maxWidth = 800;
+        options.quality = 80;
+        QByteArray data;
+        QString format;
+        QSize outputSize;
+        QString error;
+        QVERIFY2(ImageCompressor::compress(source, options, &data, &format,
+                                           &outputSize, &error), qPrintable(error));
+        QVERIFY(!data.isEmpty());
+        QCOMPARE(format, QStringLiteral("jpeg"));
+        QCOMPARE(outputSize, QSize(800, 400));
+        QImage decoded;
+        QVERIFY(decoded.loadFromData(data, "JPEG"));
+        QCOMPARE(decoded.size(), outputSize);
+    }
+
+    void screenCaptureCanCaptureAndPersistCompressedImage()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        ScreenCapture capture;
+        ImageCompressionOptions options;
+        options.maxWidth = 640;
+        options.quality = 60;
+        capture.configure(false, 5000, directory.path(), options);
+        QSignalSpy capturedSpy(&capture, &ScreenCapture::captured);
+        QString error;
+        if (!capture.captureNow(&error)) {
+            QSKIP(qPrintable(QStringLiteral("screen capture unavailable in test environment: %1")
+                                 .arg(error)));
+        }
+        QCOMPARE(capturedSpy.count(), 1);
+        const CapturedImage image = qvariant_cast<CapturedImage>(capturedSpy.at(0).at(0));
+        QVERIFY(!image.data.isEmpty());
+        QVERIFY(!image.filePath.isEmpty());
+        QVERIFY(QFileInfo::exists(image.filePath));
+        QVERIFY(image.size.width() <= 640);
+        QVERIFY(capture.clearCaptures(&error));
+        QVERIFY(!QFileInfo::exists(image.filePath));
     }
 
     void applicationConfigPersistsAssetPaths()
@@ -328,6 +385,12 @@ private slots:
         ui.appIconPath = QStringLiteral("assets/app-icon.png");
         ui.petAvatarPath = QStringLiteral("assets/pet-avatar.png");
         ui.conversationAvatarPath = QStringLiteral("assets/history-avatar.png");
+        ui.screenCaptureEnabled = true;
+        ui.screenCaptureIntervalMs = 7000;
+        ui.captureOnChat = true;
+        ui.captureImageFormat = QStringLiteral("webp");
+        ui.captureMaxWidth = 1024;
+        ui.captureQuality = 68;
         QVERIFY2(repository.save(persona, limits, &errorMessage, &ui),
                  qPrintable(errorMessage));
 
@@ -337,6 +400,12 @@ private slots:
         QCOMPARE(reloadedUi.appIconPath, QStringLiteral("assets/app-icon.png"));
         QCOMPARE(reloadedUi.petAvatarPath, QStringLiteral("assets/pet-avatar.png"));
         QCOMPARE(reloadedUi.conversationAvatarPath, QStringLiteral("assets/history-avatar.png"));
+        QVERIFY(reloadedUi.screenCaptureEnabled);
+        QCOMPARE(reloadedUi.screenCaptureIntervalMs, 7000);
+        QVERIFY(reloadedUi.captureOnChat);
+        QCOMPARE(reloadedUi.captureImageFormat, QStringLiteral("webp"));
+        QCOMPARE(reloadedUi.captureMaxWidth, 1024);
+        QCOMPARE(reloadedUi.captureQuality, 68);
     }
 
     void databaseInitializesSchema()
