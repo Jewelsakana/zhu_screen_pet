@@ -43,6 +43,7 @@ if (WIN32)
         "${ZHU_SCREEN_PET_QT_ROOT}/Tools/OpenSSL*/bin")
     set(ZHU_SCREEN_PET_OPENSSL_SEARCH_DIRS
         "${ZHU_SCREEN_PET_OPENSSL_RUNTIME_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/openssl/win64"
         "${ZHU_SCREEN_PET_QT_PREFIX}/bin"
         ${ZHU_SCREEN_PET_OPENSSL_TOOL_DIRS})
     set(ZHU_SCREEN_PET_SSL_NAMES

@@ -15,11 +15,12 @@ jobs:
         with:
           version: 5.15.2
           arch: win64_msvc2019_64
-          tools: tools_openssl_x64
-          extra: --base https://mirrors.ocf.berkeley.edu/qt/ --timeout 30
           cache: true
       - name: Configure
-        run: cmake -S . -B build -A x64 -DZHU_SCREEN_PET_BUILD_TESTS=ON
+        run: >-
+          cmake -S . -B build -A x64
+          -DZHU_SCREEN_PET_BUILD_TESTS=ON
+          -DZHU_SCREEN_PET_OPENSSL_RUNTIME_DIR=${{ github.workspace }}/third_party/openssl/win64
       - name: Build and link
         run: cmake --build build --config Debug --parallel
       - name: Test
