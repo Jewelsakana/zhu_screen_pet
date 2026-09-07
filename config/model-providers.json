@@ -18,9 +18,9 @@
         {
             "id": "deepseek-chat",
             "provider_type": "deepseek",
-            "display_name": "DeepSeek Chat",
+            "display_name": "DeepSeek Vision",
             "base_url": "https://api.deepseek.com",
-            "model": "deepseek-chat",
+            "model": "deepseek-v4-flash-vision-exp",
             "credential_service": "zhu_screen_pet",
             "credential_account": "deepseek-api-key",
             "mock_reply": "",

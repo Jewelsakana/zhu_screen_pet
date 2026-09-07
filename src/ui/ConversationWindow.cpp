@@ -105,6 +105,15 @@ void ConversationWindow::setController(ConversationController* controller)
                 setConversation(id, title, messages);
                 refreshList(controller_->conversations());
             });
+    connect(controller_, &ConversationController::olderMessagesLoaded, this,
+            [this](const QString& id, const QVector<ConversationMessage>& messages,
+                   int, bool hasOlderMessages) {
+                if (id != currentId_) return;
+                currentMessages_ = messages;
+                if (ConversationHistoryWindow* history = currentHistoryWindow()) {
+                    history->replaceMessagesPreservingPosition(messages, hasOlderMessages);
+                }
+            });
     refreshList(controller_->conversations());
     setConversation(controller_->currentConversationId(), controller_->currentConversationTitle(),
                     controller_->currentConversationMessages());
@@ -216,9 +225,18 @@ void ConversationWindow::showCurrentHistory()
         // 历史窗口是真正无父级的顶层窗口，由本列表窗口显式管理生命周期。
         historyWindow_ = new ConversationHistoryWindow();
         historyWindow_->setPetAvatarPath(conversationAvatarPath_);
+        connect(historyWindow_, &ConversationHistoryWindow::olderMessagesRequested,
+                this, [this]() {
+                    if (controller_ != nullptr && !controller_->loadOlderMessages()
+                        && historyWindow_ != nullptr) {
+                        historyWindow_->setHasOlderMessages(controller_->hasOlderMessages());
+                    }
+                });
         connect(historyWindow_, &QObject::destroyed, this, [this]() { historyWindow_ = nullptr; });
     }
     historyWindow_->setConversation(currentId_, currentTitle_, currentMessages_);
+    historyWindow_->setHasOlderMessages(controller_ != nullptr
+                                        && controller_->hasOlderMessages());
     if (streamingAssistantActive_) {
         historyWindow_->beginAssistantReply();
         if (!streamingAssistantContent_.isEmpty()) {

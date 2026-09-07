@@ -20,6 +20,48 @@ ChatController::ChatController(ChatProvider* provider, MemoryOrchestrator* memor
 QString ChatController::sendMessage(const QString& conversationId, const QString& text,
                                     const ChatOptions& options)
 {
+    return sendMessageInternal(conversationId, text, nullptr, {}, {},
+                               ChatRequestKind::Normal, options);
+}
+
+QString ChatController::sendScreenshotMessage(const QString& conversationId, const QString& text,
+                                              const MessageImage& image,
+                                              const QByteArray& fingerprint,
+                                              const QDateTime& capturedAt,
+                                              const ChatOptions& options)
+{
+    if (!image.isValid() || fingerprint.isEmpty() || !capturedAt.isValid()) {
+        fail({AppErrorCode::InvalidArgument, QStringLiteral("截图内容不能为空"), 0,
+              ErrorDomain::Application,
+              QStringLiteral("screenshot image, fingerprint or capture time is invalid"),
+              QStringLiteral("chat.send_screenshot"), {}, false});
+        return {};
+    }
+    return sendMessageInternal(conversationId, text, &image, fingerprint, capturedAt,
+                               ChatRequestKind::Screenshot, options);
+}
+
+QString ChatController::sendUserMessageWithScreenshot(
+    const QString& conversationId, const QString& text, const MessageImage& image,
+    const QByteArray& fingerprint, const QDateTime& capturedAt,
+    const ChatOptions& options)
+{
+    if (!image.isValid() || fingerprint.isEmpty() || !capturedAt.isValid()) {
+        fail({AppErrorCode::InvalidArgument, QStringLiteral("截图内容不能为空"), 0,
+              ErrorDomain::Application,
+              QStringLiteral("screenshot image, fingerprint or capture time is invalid"),
+              QStringLiteral("chat.send_user_screenshot"), {}, false});
+        return {};
+    }
+    return sendMessageInternal(conversationId, text, &image, fingerprint, capturedAt,
+                               ChatRequestKind::Normal, options);
+}
+
+QString ChatController::sendMessageInternal(const QString& conversationId, const QString& text,
+                                            const MessageImage* image, const QByteArray& fingerprint,
+                                            const QDateTime& capturedAt,
+                                            ChatRequestKind requestKind, ChatOptions options)
+{
     lastError_ = AppError{};
     if (provider_ == nullptr || memory_ == nullptr) {
         fail({AppErrorCode::NotReady, QStringLiteral("聊天服务暂不可用"), 0,
@@ -49,6 +91,7 @@ QString ChatController::sendMessage(const QString& conversationId, const QString
     ContextRequest contextRequest;
     contextRequest.conversationId = conversationId;
     contextRequest.currentInput = text;
+    contextRequest.includeLatestObservation = image == nullptr;
     contextRequest.leadingMessages.push_back(
         Message::create(MessageRole::System, persona_.systemInstruction()));
     QString errorMessage;
@@ -58,8 +101,26 @@ QString ChatController::sendMessage(const QString& conversationId, const QString
               ErrorDomain::Memory, errorMessage, QStringLiteral("chat.build_context"), {}, false});
         return {};
     }
-    if (!memory_->appendMessage(conversationId,
-                                Message::create(MessageRole::User, text), &errorMessage)) {
+    std::vector<Message> requestContext = context.messages;
+    if (image != nullptr) {
+        if (requestContext.empty()) {
+            fail({AppErrorCode::DatabaseQuery, QStringLiteral("无法构建截图聊天上下文"), 0,
+                  ErrorDomain::Memory, QStringLiteral("screenshot context is empty"),
+                  QStringLiteral("chat.build_screenshot_context"), {}, false});
+            return {};
+        }
+        requestContext.back().image = *image;
+    }
+    options.requestKind = requestKind;
+    // DeepSeek 视觉接口按文档使用普通 JSON 响应。其思考模式默认开启，
+    // 短回复预算可能全部消耗在 reasoning_content，导致最终 content 为空。
+    // 所有带图请求都统一关闭流式与思考模式；非 DeepSeek Provider 会忽略后者。
+    if (image != nullptr) {
+        options.stream = false;
+        options.disableThinking = true;
+    }
+    if (requestKind == ChatRequestKind::Normal && !memory_->appendMessage(
+            conversationId, Message::create(MessageRole::User, text), &errorMessage)) {
         fail({AppErrorCode::DatabaseQuery, QStringLiteral("无法保存用户消息"), 0,
               ErrorDomain::Database, errorMessage, QStringLiteral("chat.save_user_message"), {}, false});
         return {};
@@ -68,8 +129,11 @@ QString ChatController::sendMessage(const QString& conversationId, const QString
     PendingChat pending;
     pending.conversationId = conversationId;
     pending.userText = text;
-    pending.context = context.messages;
+    pending.kind = options.requestKind;
+    pending.context = std::move(requestContext);
     pending.options = options;
+    pending.observationFingerprint = fingerprint;
+    pending.observationCapturedAt = capturedAt;
     // Persona 的回复长度是应用级策略，统一覆盖调用方的临时 maxTokens。
     pending.options.maxTokens = persona_.maxReplyTokens;
     return startPending(std::move(pending));
@@ -159,32 +223,52 @@ void ChatController::onChatFinished(const QString& requestId, const ChatResult& 
     pending_.erase(it);
 
     if (!result.succeeded) {
-        lastFailed_ = pending;
-        hasLastFailed_ = result.error.code != ModelErrorCode::Cancelled;
+        if (pending.kind == ChatRequestKind::Normal) {
+            lastFailed_ = pending;
+            hasLastFailed_ = result.error.code != ModelErrorCode::Cancelled;
+        }
         setState(result.error.code == ModelErrorCode::Cancelled
                      ? PetState::Idle : PetState::Error);
-        emit requestFailed(requestId, result.error);
+        ModelError error = result.error;
+        if (pending.kind == ChatRequestKind::Screenshot) error.retryable = false;
+        emit requestFailed(requestId, error);
         return;
     }
 
     const QString content = result.content.isEmpty() ? pending.accumulatedReply : result.content;
     QString errorMessage;
-    if (content.isEmpty() || !memory_->appendMessage(
-            pending.conversationId, Message::create(MessageRole::Assistant, content), &errorMessage)) {
+    bool persisted = !content.isEmpty();
+    if (persisted && pending.kind == ChatRequestKind::Screenshot) {
+        ObservationEvent observation;
+        observation.conversationId = pending.conversationId;
+        observation.summary = content;
+        observation.fingerprint = pending.observationFingerprint;
+        observation.capturedAt = pending.observationCapturedAt;
+        observation.expiresAt = pending.observationCapturedAt.addSecs(
+            ObservationEvent::DefaultTtlSeconds);
+        persisted = memory_->appendObservation(observation, &errorMessage);
+    } else if (persisted) {
+        persisted = memory_->appendMessage(
+            pending.conversationId, Message::create(MessageRole::Assistant, content), &errorMessage);
+    }
+    if (!persisted) {
         ModelError error;
         error.code = content.isEmpty() ? ModelErrorCode::InvalidResponse : ModelErrorCode::Unknown;
-        error.message = content.isEmpty() ? QStringLiteral("模型返回了空回复") : QStringLiteral("无法保存助手回复");
+        error.message = content.isEmpty() ? QStringLiteral("模型返回了空回复")
+            : pending.kind == ChatRequestKind::Screenshot
+                ? QStringLiteral("无法保存屏幕观察") : QStringLiteral("无法保存助手回复");
         error.domain = content.isEmpty() ? ErrorDomain::Model : ErrorDomain::Database;
         error.technicalMessage = errorMessage.isEmpty() ? QStringLiteral("model returned an empty reply")
-            : QStringLiteral("failed to save assistant reply: %1").arg(errorMessage);
-        error.operation = QStringLiteral("chat.save_assistant_reply");
+            : QStringLiteral("failed to persist model result: %1").arg(errorMessage);
+        error.operation = pending.kind == ChatRequestKind::Screenshot
+            ? QStringLiteral("chat.save_observation") : QStringLiteral("chat.save_assistant_reply");
         lastFailed_ = pending;
-        hasLastFailed_ = true;
+        hasLastFailed_ = pending.kind == ChatRequestKind::Normal;
         setState(PetState::Error);
         emit requestFailed(requestId, error);
         return;
     }
-    hasLastFailed_ = false;
+    if (pending.kind == ChatRequestKind::Normal) hasLastFailed_ = false;
     setState(PetState::Idle);
     emit replyFinished(requestId, content);
 }
@@ -205,7 +289,7 @@ QString ChatController::startPending(PendingChat pending)
               ErrorDomain::Model, QStringLiteral("chat provider did not return a request id"),
               QStringLiteral("chat.start"), {}, true});
         lastFailed_ = std::move(pending);
-        hasLastFailed_ = true;
+        hasLastFailed_ = lastFailed_.kind == ChatRequestKind::Normal;
         setState(PetState::Error);
         return {};
     }

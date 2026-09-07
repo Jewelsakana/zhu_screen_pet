@@ -18,10 +18,12 @@ struct HttpResponse
     QByteArray body;
     int networkError = 0;
     QString errorString;
+    QString contentType;
     bool timedOut = false;
+    bool responseTooLarge = false;
 
     /** 返回网络传输成功且 HTTP 状态为 2xx。 */
-    bool succeeded() const { return !timedOut && networkError == 0
+    bool succeeded() const { return !timedOut && !responseTooLarge && networkError == 0
         && statusCode >= 200 && statusCode < 300; }
 };
 
@@ -33,6 +35,7 @@ class HttpClient final : public QObject
     Q_OBJECT
 
 public:
+    static constexpr qint64 MaximumResponseBytes = 8 * 1024 * 1024;
     /** 创建 HTTP 客户端；网络请求在 Qt 事件循环中异步执行。 */
     explicit HttpClient(QObject* parent = nullptr);
 
@@ -43,7 +46,7 @@ public:
     /** 发起 JSON POST 请求并自动设置 Content-Type。 */
     QString postJson(const QUrl& url, const QByteArray& body,
                      const QList<QPair<QByteArray, QByteArray>>& headers = {},
-                     int timeoutMs = 30000);
+                     int timeoutMs = 30000, bool bufferResponse = true);
     /** 中止一个仍在进行的网络请求。 */
     void cancel(const QString& requestId);
 
@@ -58,7 +61,7 @@ private:
     void configureRequest(QNetworkRequest& request,
                           const QList<QPair<QByteArray, QByteArray>>& headers) const;
     /** 发起请求并注册超时与完成处理。 */
-    QString send(QNetworkReply* reply, int timeoutMs);
+    QString send(QNetworkReply* reply, int timeoutMs, bool bufferResponse = true);
     /** 完成并清理请求上下文。 */
     void finish(const QString& requestId, bool timedOut = false);
 
@@ -66,6 +69,9 @@ private:
     QHash<QString, QNetworkReply*> replies_;
     QHash<QString, QTimer*> timers_;
     QHash<QString, QByteArray> responseBuffers_;
+    QHash<QString, qint64> responseSizes_;
+    QHash<QString, bool> bufferResponses_;
+    QHash<QString, bool> oversizedResponses_;
 };
 
 } // namespace zhu_screen_pet

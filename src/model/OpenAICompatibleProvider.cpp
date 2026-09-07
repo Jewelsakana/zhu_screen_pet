@@ -10,6 +10,66 @@
 
 namespace zhu_screen_pet {
 
+namespace {
+
+QString jsonTypeName(const QJsonValue& value)
+{
+    switch (value.type()) {
+    case QJsonValue::Null: return QStringLiteral("null");
+    case QJsonValue::Bool: return QStringLiteral("bool");
+    case QJsonValue::Double: return QStringLiteral("number");
+    case QJsonValue::String: return QStringLiteral("string");
+    case QJsonValue::Array: return QStringLiteral("array");
+    case QJsonValue::Object: return QStringLiteral("object");
+    case QJsonValue::Undefined: return QStringLiteral("undefined");
+    }
+    return QStringLiteral("unknown");
+}
+
+QString responseShape(const QJsonObject& root, const QJsonObject& choice,
+                      const QJsonObject& message)
+{
+    const QJsonValue content = message.value(QStringLiteral("content"));
+    const QJsonValue reasoning = message.value(QStringLiteral("reasoning_content"));
+    const auto valueLength = [](const QJsonValue& value) {
+        if (value.isString()) return value.toString().size();
+        if (value.isArray()) return value.toArray().size();
+        return 0;
+    };
+    return QStringLiteral(
+        "root_keys=[%1] choice_keys=[%2] message_keys=[%3] finish_reason=%4 "
+        "content_type=%5 content_size=%6 reasoning_type=%7 reasoning_size=%8")
+        .arg(root.keys().join(QLatin1Char(',')),
+             choice.keys().join(QLatin1Char(',')),
+             message.keys().join(QLatin1Char(',')),
+             choice.value(QStringLiteral("finish_reason")).toString(QStringLiteral("<none>")),
+             jsonTypeName(content), QString::number(valueLength(content)),
+             jsonTypeName(reasoning), QString::number(valueLength(reasoning)));
+}
+
+QString textFromContent(const QJsonValue& value)
+{
+    if (value.isString()) return value.toString();
+    if (!value.isArray()) return {};
+
+    QStringList parts;
+    const QJsonArray blocks = value.toArray();
+    for (const QJsonValue& blockValue : blocks) {
+        if (blockValue.isString()) {
+            if (!blockValue.toString().isEmpty()) parts.append(blockValue.toString());
+            continue;
+        }
+        if (!blockValue.isObject()) continue;
+        const QJsonObject block = blockValue.toObject();
+        QString text = block.value(QStringLiteral("text")).toString();
+        if (text.isEmpty()) text = block.value(QStringLiteral("content")).toString();
+        if (!text.isEmpty()) parts.append(text);
+    }
+    return parts.join(QLatin1Char('\n'));
+}
+
+} // namespace
+
 struct OpenAICompatibleProvider::PendingRequest
 {
     QString requestId;
@@ -151,7 +211,25 @@ QByteArray OpenAICompatibleProvider::buildRequestBody(const PendingRequest& requ
     for (const Message& message : request.messages) {
         QJsonObject item;
         item.insert(QStringLiteral("role"), messageRoleName(message.role));
-        item.insert(QStringLiteral("content"), message.content);
+        if (!message.hasImage()) {
+            item.insert(QStringLiteral("content"), message.content);
+        } else {
+            QJsonArray content;
+            if (!message.content.isEmpty()) {
+                content.append(QJsonObject{
+                    {QStringLiteral("type"), QStringLiteral("text")},
+                    {QStringLiteral("text"), message.content}});
+            }
+            const QString dataUrl = QStringLiteral("data:%1;base64,%2")
+                .arg(message.image.mimeType,
+                     QString::fromLatin1(message.image.data.toBase64()));
+            content.append(QJsonObject{
+                {QStringLiteral("type"), QStringLiteral("image_url")},
+                {QStringLiteral("image_url"), QJsonObject{
+                    {QStringLiteral("url"), dataUrl},
+                    {QStringLiteral("detail"), message.image.detail}}}});
+            item.insert(QStringLiteral("content"), content);
+        }
         messages.append(item);
     }
 
@@ -163,6 +241,10 @@ QByteArray OpenAICompatibleProvider::buildRequestBody(const PendingRequest& requ
     root.insert(QStringLiteral("temperature"), request.options.temperature);
     root.insert(QStringLiteral("max_tokens"), request.options.maxTokens);
     root.insert(QStringLiteral("stream"), request.stream);
+    if (request.options.disableThinking && providerName() == QStringLiteral("DeepSeek")) {
+        root.insert(QStringLiteral("thinking"), QJsonObject{
+            {QStringLiteral("type"), QStringLiteral("disabled")}});
+    }
     return QJsonDocument(root).toJson(QJsonDocument::Compact);
 }
 
@@ -188,7 +270,8 @@ void OpenAICompatibleProvider::sendAttempt(const QString& requestId)
             ? QByteArrayLiteral("text/event-stream") : QByteArrayLiteral("application/json")}
     };
     request->transportRequestId = httpClient_->postJson(
-        completionUrl(), buildRequestBody(*request), headers, config_.timeoutMs);
+        completionUrl(), buildRequestBody(*request), headers, config_.timeoutMs,
+        !request->stream);
     transportToRequest_.insert(request->transportRequestId, requestId);
 
     if (logger_ != nullptr) {
@@ -210,13 +293,31 @@ void OpenAICompatibleProvider::onHttpFinished(const QString& transportRequestId,
     }
     request->transportRequestId.clear();
 
+    if (logger_ != nullptr) {
+        logger_->debug(QStringLiteral("model"), QStringLiteral("response_received"),
+                       QStringLiteral("%1 status=%2 content_type=%3 stream=%4")
+                           .arg(requestId).arg(response.statusCode)
+                           .arg(response.contentType.isEmpty()
+                                ? QStringLiteral("<none>") : response.contentType)
+                           .arg(request->stream ? QStringLiteral("true") : QStringLiteral("false")));
+    }
+
     if (request->stream) {
+        const bool actualEventStream = response.contentType.toLower().startsWith(
+            QStringLiteral("text/event-stream"));
+        if (!actualEventStream && response.succeeded()) {
+            const ChatResult fallback = parseChatResponse(response);
+            if (fallback.succeeded) finishSuccess(requestId, fallback.content);
+            else finishFailure(requestId, fallback.error);
+            return;
+        }
         if (request->streamError.code != ModelErrorCode::None) {
             finishFailure(requestId, request->streamError);
         } else if (!response.succeeded() || response.statusCode < 200
                    || response.statusCode >= 300) {
             // 流式内容一旦发送给上层便不可撤回，不能把第二次响应透明拼接到第一次响应。
-            if (!request->deltaEmitted && shouldRetry(response)
+            if (request->options.requestKind == ChatRequestKind::Normal
+                && !request->deltaEmitted && shouldRetry(response)
                 && request->attempts <= config_.maxRetries) {
                 request->sseBuffer.clear();
                 request->streamedContent.clear();
@@ -245,7 +346,8 @@ void OpenAICompatibleProvider::onHttpFinished(const QString& transportRequestId,
         return;
     }
 
-    if (shouldRetry(response) && request->attempts <= config_.maxRetries) {
+    if (request->options.requestKind == ChatRequestKind::Normal
+        && shouldRetry(response) && request->attempts <= config_.maxRetries) {
         scheduleRetry(requestId);
         return;
     }
@@ -323,6 +425,7 @@ bool OpenAICompatibleProvider::parseSseData(const QString& requestId,
 
 bool OpenAICompatibleProvider::shouldRetry(const HttpResponse& response) const
 {
+    if (response.responseTooLarge) return false;
     if (response.timedOut) return true;
     // QNetworkReply 会为 HTTP 4xx/5xx 同时设置 NetworkError。只要服务端已经
     // 返回明确的失败状态，就必须先按协议状态判断，不能把 401/403 等误当成
@@ -357,17 +460,36 @@ ChatResult OpenAICompatibleProvider::parseChatResponse(const HttpResponse& respo
         return ChatResult::failure({ModelErrorCode::InvalidResponse,
                                     QStringLiteral("invalid JSON response"), response.statusCode});
     }
-    const QJsonArray choices = document.object().value(QStringLiteral("choices")).toArray();
+    const QJsonObject root = document.object();
+    const QJsonArray choices = root.value(QStringLiteral("choices")).toArray();
     if (choices.isEmpty() || !choices.first().isObject()) {
         return ChatResult::failure({ModelErrorCode::InvalidResponse,
                                     QStringLiteral("response does not contain choices"), response.statusCode});
     }
-    const QJsonObject message = choices.first().toObject()
-        .value(QStringLiteral("message")).toObject();
-    const QString content = message.value(QStringLiteral("content")).toString();
-    if (content.isEmpty()) {
-        return ChatResult::failure({ModelErrorCode::InvalidResponse,
-                                    QStringLiteral("response content is empty"), response.statusCode});
+    const QJsonObject choice = choices.first().toObject();
+    const QJsonObject message = choice.value(QStringLiteral("message")).toObject();
+    const QString content = textFromContent(message.value(QStringLiteral("content")));
+    if (content.trimmed().isEmpty()) {
+        const QString shape = responseShape(root, choice, message);
+        if (logger_ != nullptr) {
+            // 仅记录字段名、类型和长度，不记录回复文本、请求体或图片数据。
+            logger_->warning(QStringLiteral("model"), QStringLiteral("empty_response_content"),
+                             shape, QStringLiteral("invalid_response"));
+        }
+        ModelError error;
+        error.code = ModelErrorCode::InvalidResponse;
+        error.message = QStringLiteral("response content is empty");
+        error.httpStatus = response.statusCode;
+        error.domain = ErrorDomain::Model;
+        error.operation = QStringLiteral("model.chat.parse_response");
+        const bool reasoningBudgetExhausted =
+            choice.value(QStringLiteral("finish_reason")).toString() == QStringLiteral("length")
+            && !message.value(QStringLiteral("reasoning_content")).toString().isEmpty();
+        error.technicalMessage = reasoningBudgetExhausted
+            ? QStringLiteral("response content is empty because the token budget was exhausted "
+                             "by reasoning_content; %1").arg(shape)
+            : QStringLiteral("response content is empty; %1").arg(shape);
+        return ChatResult::failure(error);
     }
     return ChatResult::success(content);
 }
@@ -378,6 +500,12 @@ ModelError OpenAICompatibleProvider::errorFromResponse(const HttpResponse& respo
     error.domain = ErrorDomain::Model;
     error.operation = QStringLiteral("model.chat");
     error.httpStatus = response.statusCode;
+    if (response.responseTooLarge) {
+        error.code = ModelErrorCode::InvalidResponse;
+        error.message = response.errorString;
+        error.technicalMessage = response.errorString;
+        return error;
+    }
     if (response.timedOut) {
         error.code = ModelErrorCode::Timeout;
         error.message = QStringLiteral("model request timed out");

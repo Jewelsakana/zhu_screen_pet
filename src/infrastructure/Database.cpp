@@ -158,6 +158,7 @@ bool Database::migrate(QString* errorMessage)
         return false;
     }
     int version = versionQuery.value(0).toInt();
+    versionQuery.finish();
     if (version < 2) {
         ok = execute(QStringLiteral(
             "CREATE TABLE IF NOT EXISTS conversations ("
@@ -190,6 +191,75 @@ bool Database::migrate(QString* errorMessage)
             "name TEXT PRIMARY KEY, enabled INTEGER NOT NULL, detail TEXT)"), errorMessage);
         ok = ok && execute(QStringLiteral("UPDATE schema_version SET version = 3"), errorMessage);
         version = 3;
+    }
+    if (ok && version < 4) {
+        ok = execute(QStringLiteral(
+            "CREATE TABLE IF NOT EXISTS observation_events ("
+            "id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, summary TEXT NOT NULL, "
+            "fingerprint BLOB NOT NULL, captured_at TEXT NOT NULL, expires_at TEXT NOT NULL, "
+            "FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE)"),
+                     errorMessage);
+        ok = ok && execute(QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_observation_events_conversation_time "
+            "ON observation_events(conversation_id, captured_at DESC, id)"), errorMessage);
+        ok = ok && execute(QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_observation_events_expiry "
+            "ON observation_events(expires_at)"), errorMessage);
+
+        // 把旧版本已经混入普通会话的自动截图记录迁出。失败截图只有 marker，
+        // 成功截图则紧跟一条 assistant 回复；旧记录统一视为已过期，避免启动后注入。
+        ok = ok && execute(QStringLiteral(
+            "CREATE TEMP TABLE legacy_screenshot_pairs("
+            "marker_id INTEGER PRIMARY KEY,response_id INTEGER)"), errorMessage);
+        ok = ok && execute(QStringLiteral(
+            "INSERT INTO legacy_screenshot_pairs(marker_id,response_id) "
+            "SELECT marker.id,CASE WHEN (SELECT next.role FROM conversation_messages next "
+            "WHERE next.conversation_id=marker.conversation_id AND next.id>marker.id "
+            "ORDER BY next.id LIMIT 1)='assistant' THEN "
+            "(SELECT next.id FROM conversation_messages next "
+            "WHERE next.conversation_id=marker.conversation_id AND next.id>marker.id "
+            "ORDER BY next.id LIMIT 1) ELSE NULL END FROM conversation_messages marker "
+            "WHERE marker.role='user' AND marker.content='用户发起了一次截图分析'"), errorMessage);
+        ok = ok && execute(QStringLiteral(
+            "INSERT OR IGNORE INTO observation_events("
+            "id,conversation_id,summary,fingerprint,captured_at,expires_at) "
+            "SELECT 'legacy-'||marker.id,marker.conversation_id,reply.content,"
+            "CAST('legacy-'||marker.id AS BLOB),reply.created_at,reply.created_at "
+            "FROM legacy_screenshot_pairs pair "
+            "JOIN conversation_messages marker ON marker.id=pair.marker_id "
+            "JOIN conversation_messages reply ON reply.id=pair.response_id"), errorMessage);
+        ok = ok && execute(QStringLiteral(
+            "DELETE FROM conversation_messages WHERE id IN ("
+            "SELECT marker_id FROM legacy_screenshot_pairs UNION "
+            "SELECT response_id FROM legacy_screenshot_pairs WHERE response_id IS NOT NULL)"),
+                           errorMessage);
+        ok = ok && execute(QStringLiteral("DROP TABLE legacy_screenshot_pairs"), errorMessage);
+
+        // SQLite 不能直接为已有列追加外键，因此重建 memories 表。旧版本的
+        // source_event_id 尚无来源表约束，只保留确实能对应观察事件的值。
+        ok = ok && execute(QStringLiteral("DROP TRIGGER IF EXISTS memories_fts_ai"), errorMessage);
+        ok = ok && execute(QStringLiteral("DROP TRIGGER IF EXISTS memories_fts_ad"), errorMessage);
+        ok = ok && execute(QStringLiteral("DROP TRIGGER IF EXISTS memories_fts_au"), errorMessage);
+        ok = ok && execute(QStringLiteral(
+            "CREATE TABLE memories_v4 ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, content TEXT NOT NULL, "
+            "source_event_id TEXT, created_at TEXT NOT NULL, expires_at TEXT, "
+            "FOREIGN KEY (source_event_id) REFERENCES observation_events(id) ON DELETE SET NULL)"),
+                           errorMessage);
+        ok = ok && execute(QStringLiteral(
+            "INSERT INTO memories_v4(id,kind,content,source_event_id,created_at,expires_at) "
+            "SELECT id,kind,content,"
+            "CASE WHEN source_event_id IN (SELECT id FROM observation_events) "
+            "THEN source_event_id ELSE NULL END,created_at,expires_at FROM memories"),
+                           errorMessage);
+        ok = ok && execute(QStringLiteral("DROP TABLE memories"), errorMessage);
+        ok = ok && execute(QStringLiteral("ALTER TABLE memories_v4 RENAME TO memories"),
+                           errorMessage);
+        ok = ok && execute(QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_memories_kind_time ON memories(kind, created_at)"),
+                           errorMessage);
+        ok = ok && execute(QStringLiteral("UPDATE schema_version SET version = 4"), errorMessage);
+        version = 4;
     }
     if (!ok || !database_.commit()) {
         database_.rollback();

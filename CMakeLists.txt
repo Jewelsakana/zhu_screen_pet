@@ -31,21 +31,41 @@ if (MSVC AND NOT ZHU_SCREEN_PET_MSVC_RUNTIME_DIR
             "Directory containing the redistributable MSVC x64 CRT DLLs" FORCE)
     endif()
 endif()
-if (WIN32 AND (NOT ZHU_SCREEN_PET_OPENSSL_RUNTIME_DIR
-    OR ZHU_SCREEN_PET_OPENSSL_RUNTIME_DIR MATCHES
-        "/Tools/OpenSSLv3/Win_x64/bin$"))
+set(ZHU_SCREEN_PET_OPENSSL_RUNTIME_FILES "")
+if (WIN32)
     get_filename_component(ZHU_SCREEN_PET_QT_PREFIX
         "${Qt5_DIR}/../../.." ABSOLUTE)
     get_filename_component(ZHU_SCREEN_PET_QT_ROOT
         "${ZHU_SCREEN_PET_QT_PREFIX}/../.." ABSOLUTE)
-    set(ZHU_SCREEN_PET_OPENSSL_CANDIDATE
-        "${ZHU_SCREEN_PET_QT_ROOT}/Tools/OpenSSL_1_1_1w/runtime")
-    if (EXISTS "${ZHU_SCREEN_PET_OPENSSL_CANDIDATE}/libssl-1_1-x64.dll"
-        AND EXISTS "${ZHU_SCREEN_PET_OPENSSL_CANDIDATE}/libcrypto-1_1-x64.dll")
-        set(ZHU_SCREEN_PET_OPENSSL_RUNTIME_DIR
-            "${ZHU_SCREEN_PET_OPENSSL_CANDIDATE}" CACHE PATH
-            "Directory containing the OpenSSL runtime DLLs used by Qt" FORCE)
-    endif()
+    file(GLOB ZHU_SCREEN_PET_OPENSSL_TOOL_DIRS LIST_DIRECTORIES true
+        "${ZHU_SCREEN_PET_QT_ROOT}/Tools/OpenSSL*/runtime"
+        "${ZHU_SCREEN_PET_QT_ROOT}/Tools/OpenSSL*/Win_x64/bin"
+        "${ZHU_SCREEN_PET_QT_ROOT}/Tools/OpenSSL*/bin")
+    set(ZHU_SCREEN_PET_OPENSSL_SEARCH_DIRS
+        "${ZHU_SCREEN_PET_OPENSSL_RUNTIME_DIR}"
+        "${ZHU_SCREEN_PET_QT_PREFIX}/bin"
+        ${ZHU_SCREEN_PET_OPENSSL_TOOL_DIRS})
+    set(ZHU_SCREEN_PET_SSL_NAMES
+        "libssl-1_1-x64.dll" "libssl-1_1.dll" "ssleay32.dll")
+    set(ZHU_SCREEN_PET_CRYPTO_NAMES
+        "libcrypto-1_1-x64.dll" "libcrypto-1_1.dll" "libeay32.dll")
+    foreach(candidate_dir IN LISTS ZHU_SCREEN_PET_OPENSSL_SEARCH_DIRS)
+        if (NOT candidate_dir OR ZHU_SCREEN_PET_OPENSSL_RUNTIME_FILES)
+            continue()
+        endif()
+        foreach(pair_index RANGE 0 2)
+            list(GET ZHU_SCREEN_PET_SSL_NAMES ${pair_index} ssl_name)
+            list(GET ZHU_SCREEN_PET_CRYPTO_NAMES ${pair_index} crypto_name)
+            if (EXISTS "${candidate_dir}/${ssl_name}"
+                AND EXISTS "${candidate_dir}/${crypto_name}")
+                set(ZHU_SCREEN_PET_OPENSSL_RUNTIME_DIR "${candidate_dir}" CACHE PATH
+                    "Directory containing the OpenSSL runtime DLLs used by Qt" FORCE)
+                set(ZHU_SCREEN_PET_OPENSSL_RUNTIME_FILES
+                    "${candidate_dir}/${ssl_name}" "${candidate_dir}/${crypto_name}")
+                break()
+            endif()
+        endforeach()
+    endforeach()
 endif()
 
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/config/model-providers.json"
@@ -83,20 +103,13 @@ function(zhu_screen_pet_deploy_openssl target)
     if (NOT WIN32)
         return()
     endif()
-    set(runtime_files
-        "${ZHU_SCREEN_PET_OPENSSL_RUNTIME_DIR}/libssl-1_1-x64.dll"
-        "${ZHU_SCREEN_PET_OPENSSL_RUNTIME_DIR}/libcrypto-1_1-x64.dll")
-    foreach(runtime_file IN LISTS runtime_files)
-        if (NOT EXISTS "${runtime_file}")
-            message(WARNING
-                "OpenSSL runtime DLL was not found: ${runtime_file}. "
-                "HTTPS will be unavailable for ${target}.")
-            return()
-        endif()
-    endforeach()
+    if (NOT ZHU_SCREEN_PET_OPENSSL_RUNTIME_FILES)
+        message(WARNING "A Qt-compatible OpenSSL runtime was not found. HTTPS will be unavailable for ${target}.")
+        return()
+    endif()
     add_custom_command(TARGET ${target} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${runtime_files} "$<TARGET_FILE_DIR:${target}>"
+            ${ZHU_SCREEN_PET_OPENSSL_RUNTIME_FILES} "$<TARGET_FILE_DIR:${target}>"
         COMMENT "Deploying the OpenSSL runtime for ${target}"
         VERBATIM)
 endfunction()
@@ -110,7 +123,7 @@ zhu_screen_pet_configure_target(zhu_screen_pet_infrastructure)
 target_link_libraries(zhu_screen_pet_infrastructure PUBLIC zhu_screen_pet_core
     Qt5::Core Qt5::Gui Qt5::Widgets Qt5::Network Qt5::Sql)
 if (WIN32)
-    target_link_libraries(zhu_screen_pet_infrastructure PUBLIC Advapi32)
+    target_link_libraries(zhu_screen_pet_infrastructure PUBLIC Advapi32 User32)
 endif()
 
 add_library(zhu_screen_pet_model STATIC ${ZHU_SCREEN_PET_MODEL_SOURCES})
@@ -152,6 +165,7 @@ if (WIN32)
         HINTS "${ZHU_SCREEN_PET_QT_BIN_DIR}"
         NO_DEFAULT_PATH)
     if (ZHU_SCREEN_PET_WINDEPLOYQT_EXECUTABLE
+        AND ZHU_SCREEN_PET_OPENSSL_RUNTIME_FILES
         AND EXISTS "${ZHU_SCREEN_PET_MSVC_RUNTIME_DIR}/msvcp140.dll"
         AND EXISTS "${ZHU_SCREEN_PET_MSVC_RUNTIME_DIR}/vcruntime140.dll")
         set(ZHU_SCREEN_PET_PORTABLE_DIR
@@ -175,8 +189,7 @@ if (WIN32)
                 --dir "${ZHU_SCREEN_PET_PORTABLE_DIR}"
                 "${ZHU_SCREEN_PET_PORTABLE_DIR}/$<TARGET_FILE_NAME:zhu_screen_pet>"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${ZHU_SCREEN_PET_OPENSSL_RUNTIME_DIR}/libssl-1_1-x64.dll"
-                "${ZHU_SCREEN_PET_OPENSSL_RUNTIME_DIR}/libcrypto-1_1-x64.dll"
+                ${ZHU_SCREEN_PET_OPENSSL_RUNTIME_FILES}
                 "${ZHU_SCREEN_PET_PORTABLE_DIR}"
             COMMAND ${CMAKE_COMMAND} -E copy_directory
                 "${ZHU_SCREEN_PET_MSVC_RUNTIME_DIR}"
@@ -185,15 +198,13 @@ if (WIN32)
             COMMENT "Creating portable zhu_screen_pet package"
             VERBATIM
             USES_TERMINAL)
-    elseif (NOT ZHU_SCREEN_PET_WINDEPLOYQT_EXECUTABLE)
-        message(WARNING
-            "windeployqt was not found under ${ZHU_SCREEN_PET_QT_BIN_DIR}; "
-            "the zhu_screen_pet_portable target will not be available.")
     else()
-        message(WARNING
-            "Redistributable MSVC x64 CRT DLLs were not found. Configure "
-            "ZHU_SCREEN_PET_MSVC_RUNTIME_DIR to enable the "
-            "zhu_screen_pet_portable target.")
+        add_custom_target(zhu_screen_pet_portable
+            COMMAND ${CMAKE_COMMAND} -E echo
+                "Portable runtime prerequisites are missing: windeployqt, Qt-compatible OpenSSL 1.1, or MSVC x64 CRT."
+            COMMAND ${CMAKE_COMMAND} -E false
+            COMMENT "Cannot create portable package"
+            VERBATIM)
     endif()
 endif()
 
@@ -220,4 +231,6 @@ if (ZHU_SCREEN_PET_BUILD_TESTS)
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/memory_chat_test.cpp")
     zhu_screen_pet_add_test(zhu_screen_pet_legacy_migration_test
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/legacy_migration_test.cpp")
+    zhu_screen_pet_add_test(zhu_screen_pet_screen_capture_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/screen_capture_test.cpp")
 endif()

@@ -38,6 +38,9 @@ struct ContextRequest
     bool includeRelevantHistory = true;
     int relevantHistoryLimit = -1;
     int longTermMemoryLimit = -1;
+    /** 普通聊天可注入最近观察；截图请求自身已有当前图片，应关闭此项。 */
+    bool includeLatestObservation = true;
+    int latestObservationMaxTokens = 256;
     /** 必须保留并计入总 token 预算的 system 消息，例如 Persona。 */
     std::vector<Message> leadingMessages;
 };

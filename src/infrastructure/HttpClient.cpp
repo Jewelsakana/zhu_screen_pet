@@ -24,13 +24,13 @@ QString HttpClient::get(const QUrl& url,
 QString HttpClient::postJson(
     const QUrl& url, const QByteArray& body,
     const QList<QPair<QByteArray, QByteArray>>& headers,
-    int timeoutMs)
+    int timeoutMs, bool bufferResponse)
 {
     QNetworkRequest request(url);
     configureRequest(request, headers);
     request.setHeader(QNetworkRequest::ContentTypeHeader,
                       QStringLiteral("application/json"));
-    return send(manager_->post(request, body), timeoutMs);
+    return send(manager_->post(request, body), timeoutMs, bufferResponse);
 }
 
 void HttpClient::cancel(const QString& requestId)
@@ -41,11 +41,14 @@ void HttpClient::cancel(const QString& requestId)
     }
 }
 
-QString HttpClient::send(QNetworkReply* reply, int timeoutMs)
+QString HttpClient::send(QNetworkReply* reply, int timeoutMs, bool bufferResponse)
 {
     const QString requestId = QUuid::createUuid().toString(QUuid::Id128);
     replies_.insert(requestId, reply);
     responseBuffers_.insert(requestId, QByteArray{});
+    responseSizes_.insert(requestId, 0);
+    bufferResponses_.insert(requestId, bufferResponse);
+    oversizedResponses_.insert(requestId, false);
 
     auto* timer = new QTimer(this);
     timer->setSingleShot(true);
@@ -55,7 +58,20 @@ QString HttpClient::send(QNetworkReply* reply, int timeoutMs)
     });
     connect(reply, &QNetworkReply::readyRead, this, [this, requestId, reply]() {
         const QByteArray data = reply->readAll();
-        responseBuffers_[requestId].append(data);
+        const qint64 total = responseSizes_.value(requestId) + data.size();
+        responseSizes_[requestId] = total;
+        if (total > MaximumResponseBytes) {
+            oversizedResponses_[requestId] = true;
+            reply->abort();
+            return;
+        }
+        const QString contentType = reply->header(
+            QNetworkRequest::ContentTypeHeader).toString().toLower();
+        const bool isEventStream = contentType.startsWith(QStringLiteral("text/event-stream"));
+        // 流式请求若实际返回普通 JSON，仍保留响应体供 Provider 回退解析。
+        if (bufferResponses_.value(requestId) || !isEventStream) {
+            responseBuffers_[requestId].append(data);
+        }
         emit dataAvailable(requestId, data);
     });
     connect(reply, &QNetworkReply::finished, this, [this, requestId]() {
@@ -82,14 +98,26 @@ void HttpClient::finish(const QString& requestId, bool timedOut)
 
     HttpResponse response;
     response.statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    response.contentType = reply->header(QNetworkRequest::ContentTypeHeader).toString();
     response.body = responseBuffers_.take(requestId);
+    response.responseTooLarge = oversizedResponses_.take(requestId);
+    const bool bufferResponse = bufferResponses_.take(requestId);
+    const bool isEventStream = response.contentType.toLower().startsWith(
+        QStringLiteral("text/event-stream"));
+    qint64 responseSize = responseSizes_.take(requestId);
     const QByteArray trailingData = reply->readAll();
-    if (!trailingData.isEmpty()) {
-        response.body.append(trailingData);
+    if (!trailingData.isEmpty() && !response.responseTooLarge
+        && responseSize + trailingData.size() <= MaximumResponseBytes) {
+        responseSize += trailingData.size();
+        if (bufferResponse || !isEventStream) response.body.append(trailingData);
         emit dataAvailable(requestId, trailingData);
+    } else if (!trailingData.isEmpty()) {
+        response.responseTooLarge = true;
     }
     response.networkError = static_cast<int>(reply->error());
-    response.errorString = reply->errorString();
+    response.errorString = response.responseTooLarge
+        ? QStringLiteral("HTTP response exceeds the 8 MiB limit")
+        : reply->errorString();
     response.timedOut = timedOut;
     emit requestFinished(requestId, response);
     reply->deleteLater();

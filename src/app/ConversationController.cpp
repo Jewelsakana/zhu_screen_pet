@@ -128,13 +128,36 @@ bool ConversationController::switchConversation(const QString& conversationId, A
                               QStringLiteral("conversation is archived: %1").arg(id),
                               QStringLiteral("conversation.switch")), error);
     }
-    const auto messages = repository_->recentMessagesResult(id, 200);
+    constexpr int initialMessageLimit = 200;
+    const auto messages = repository_->recentMessagesResult(id, initialMessageLimit);
     if (!messages) return fail(messages.error(), error);
     const auto all = repository_->listConversationsResult(true);
     if (!all) return fail(all.error(), error);
     if (!persistCurrentId(id, error)) return false;
 
     commitCurrentConversation(conversation.value(), messages.value(), all.value());
+    return true;
+}
+
+bool ConversationController::loadOlderMessages(AppError* error)
+{
+    if (!ensureChatIdle(QStringLiteral("conversation.load_older"), error)) return false;
+    if (!hasOlderMessages_) return true;
+    if (repository_ == nullptr || currentConversationId_.isEmpty()) {
+        return fail(makeError(AppErrorCode::NotReady, QStringLiteral("会话历史暂不可用"),
+                              QStringLiteral("conversation repository or current id is unavailable"),
+                              QStringLiteral("conversation.load_older")), error);
+    }
+    constexpr int pageSize = 200;
+    const int requestedLimit = loadedMessageLimit_ + pageSize;
+    const auto messages = repository_->recentMessagesResult(currentConversationId_, requestedLimit);
+    if (!messages) return fail(messages.error(), error);
+    const int newlyLoaded = qMax(0, messages.value().size() - currentConversationMessages_.size());
+    loadedMessageLimit_ = requestedLimit;
+    hasOlderMessages_ = messages.value().size() == requestedLimit;
+    currentConversationMessages_ = messages.value();
+    emit olderMessagesLoaded(currentConversationId_, currentConversationMessages_,
+                             newlyLoaded, hasOlderMessages_);
     return true;
 }
 
@@ -277,6 +300,7 @@ QVector<ConversationMessage> ConversationController::currentConversationMessages
 QVector<Conversation> ConversationController::archivedConversations() const
 { return archivedConversations_; }
 QVector<Conversation> ConversationController::conversations() const { return conversations_; }
+bool ConversationController::hasOlderMessages() const { return hasOlderMessages_; }
 
 bool ConversationController::persistCurrentId(const QString& conversationId, AppError* error)
 {
@@ -307,6 +331,8 @@ void ConversationController::commitCurrentConversation(
     const Conversation& conversation, const QVector<ConversationMessage>& messages,
     const QVector<Conversation>& all)
 {
+    loadedMessageLimit_ = 200;
+    hasOlderMessages_ = messages.size() == loadedMessageLimit_;
     currentConversationId_ = conversation.id;
     currentConversationTitle_ = conversation.title;
     currentConversationMessages_ = messages;

@@ -27,7 +27,7 @@ ChatInputPanel::ChatInputPanel(QWidget* parent)
     layout->setContentsMargins(12, 8, 8, 8);
     input_ = new QTextEdit(this);
     input_->setObjectName(QStringLiteral("chatInput"));
-    input_->setPlaceholderText(QStringLiteral("和桌宠说点什么…  Enter 发送"));
+    input_->setPlaceholderText(QStringLiteral("和小珠说点什么…  Enter 发送"));
     input_->setAcceptRichText(false);
     input_->setFixedHeight(54);
     input_->installEventFilter(this);

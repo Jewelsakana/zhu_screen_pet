@@ -1,4 +1,5 @@
 #include "app/SettingsController.h"
+#include "app/SettingsApplyTransaction.h"
 
 #include "app/ChatController.h"
 #include "app/ErrorCenter.h"
@@ -212,58 +213,11 @@ bool SettingsController::apply(const ModelProviderConfig& sourceModel,
                               QStringLiteral("settings.validate_provider")), error);
     }
 
-    QByteArray oldModelFile;
-    QByteArray oldAppFile;
-    if (!modelRepository_->snapshot(&oldModelFile, &technical)
-        || !appRepository_->snapshot(&oldAppFile, &technical)) {
-        return fail(makeError(AppErrorCode::Io, QStringLiteral("无法读取旧配置，未进行修改"), technical,
-                              QStringLiteral("settings.snapshot")), error);
-    }
-    const ModelProviderConfig oldModel = providerManager_->activeConfiguration();
-    const PersonaConfig oldPersona = chatController_->personaConfig();
-    const MemoryLimits oldLimits = memory_->limits();
-    QString oldSecret;
-    bool hadOldSecret = false;
-    if (secretStore_ != nullptr && !model.credentialService.isEmpty()
-        && !model.credentialAccount.isEmpty()) {
-        hadOldSecret = secretStore_->read(model.credentialService, model.credentialAccount,
-                                          &oldSecret, nullptr);
-    }
-    if (!apiKey.trimmed().isEmpty() && secretStore_ != nullptr
-        && !model.credentialService.isEmpty() && !model.credentialAccount.isEmpty()
-        && !secretStore_->write(model.credentialService, model.credentialAccount,
-                                apiKey.trimmed(), &technical)) {
-        return fail(makeError(AppErrorCode::Io, QStringLiteral("无法保存模型密钥"), technical,
-                              QStringLiteral("settings.save_secret")), error);
-    }
-
-    if (!modelRepository_->saveProfile(model, true, &technical)
-        || !appRepository_->save(persona, limits, &technical, &ui)) {
-        modelRepository_->restore(oldModelFile, nullptr);
-        appRepository_->restore(oldAppFile, nullptr);
-        if (!apiKey.trimmed().isEmpty() && secretStore_ != nullptr) {
-            if (hadOldSecret) secretStore_->write(model.credentialService, model.credentialAccount,
-                                                   oldSecret, nullptr);
-            else secretStore_->remove(model.credentialService, model.credentialAccount, nullptr);
-        }
-        return fail(makeError(AppErrorCode::Io, QStringLiteral("设置保存失败，已保留旧配置"), technical,
-                              QStringLiteral("settings.persist")), error);
-    }
-    if (!providerManager_->switchProvider(model, &technical)
-        || !chatController_->setPersonaConfig(persona, &technical)
-        || !memory_->setLimits(limits, &technical)) {
-        providerManager_->switchProvider(oldModel, nullptr);
-        chatController_->setPersonaConfig(oldPersona, nullptr);
-        memory_->setLimits(oldLimits, nullptr);
-        modelRepository_->restore(oldModelFile, nullptr);
-        appRepository_->restore(oldAppFile, nullptr);
-        if (!apiKey.trimmed().isEmpty() && secretStore_ != nullptr) {
-            if (hadOldSecret) secretStore_->write(model.credentialService, model.credentialAccount,
-                                                   oldSecret, nullptr);
-            else secretStore_->remove(model.credentialService, model.credentialAccount, nullptr);
-        }
-        return fail(makeError(AppErrorCode::ConfigInvalid, QStringLiteral("无法应用运行时设置，已恢复旧配置"),
-                              technical, QStringLiteral("settings.apply_runtime")), error);
+    SettingsApplyTransaction transaction(modelRepository_, appRepository_, providerManager_,
+                                         chatController_, memory_, secretStore_);
+    AppError transactionError;
+    if (!transaction.execute(model, persona, limits, ui, apiKey, &transactionError)) {
+        return fail(transactionError, error);
     }
     uiConfig_ = ui;
     emit uiConfigurationChanged(uiConfig_);

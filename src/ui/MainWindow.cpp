@@ -20,8 +20,8 @@
 #include "app/ConversationController.h"
 #include "app/ErrorCenter.h"
 #include "app/SettingsController.h"
+#include "app/ScreenObservationCoordinator.h"
 #include "infrastructure/DesktopWindowPolicy.h"
-#include "infrastructure/ImageCompressor.h"
 #include "infrastructure/ScreenCapture.h"
 #include "infrastructure/WindowAttachmentManager.h"
 #include "infrastructure/WindowPlacement.h"
@@ -76,15 +76,20 @@ MainWindow::MainWindow(QWidget* parent)
     layout->addWidget(petVisual_, 1);
     layout->addWidget(stateLabel_);
     setCentralWidget(surface);
-    screenCapture_ = new ScreenCapture(this);
-    connect(screenCapture_, &ScreenCapture::captureFailed, this, [this](const QString& message) {
-        Q_UNUSED(message);
-    });
+    screenObservation_ = new ScreenObservationCoordinator(this);
+    connect(screenObservation_, &ScreenObservationCoordinator::operationFailed,
+            this, [this](const AppError& error) {
+                if (errorCenter_ != nullptr) errorCenter_->report(error);
+                else onOperationFailed(error);
+            });
+    connect(screenObservation_, &ScreenObservationCoordinator::scheduledImageReady,
+            this, &MainWindow::onScreenCaptured);
     createOverlayWindows();
 }
 
 MainWindow::~MainWindow()
 {
+    screenObservation_->shutdown();
     if (conversationWindow_ != nullptr) {
         conversationWindow_->removeEventFilter(this);
         if (ConversationHistoryWindow* history = conversationWindow_->historyWindow()) {
@@ -193,6 +198,8 @@ void MainWindow::setChatController(ChatController* controller)
     if (chatController_ == controller) return;
     if (chatController_ != nullptr) disconnect(chatController_, nullptr, this, nullptr);
     chatController_ = controller;
+    screenObservation_->setObservationReady(chatController_ != nullptr
+                                             && !conversationId_.isEmpty());
     if (chatController_ != nullptr) {
         connect(chatController_, &ChatController::requestStarted, this, &MainWindow::onRequestStarted);
         connect(chatController_, &ChatController::replyDelta, this, &MainWindow::onReplyDelta);
@@ -245,7 +252,7 @@ void MainWindow::setSettingsController(SettingsController* controller)
 
 void MainWindow::setCaptureDirectory(const QString& directory)
 {
-    captureDirectory_ = directory;
+    screenObservation_->setCaptureDirectory(directory);
 }
 
 void MainWindow::setModelErrorMessages(const QHash<QString, QString>& messages)
@@ -257,16 +264,14 @@ void MainWindow::setConversation(const QString& conversationId,
                                  const QVector<ConversationMessage>& messages)
 {
     conversationId_ = conversationId;
+    screenObservation_->setObservationReady(chatController_ != nullptr
+                                             && !conversationId_.isEmpty());
     QString title;
     if (conversationController_ != nullptr
         && conversationController_->currentConversationId() == conversationId) {
         title = conversationController_->currentConversationTitle();
     }
     conversationWindow_->setConversation(conversationId, title, messages);
-    lastAssistantReply_.clear();
-    for (const ConversationMessage& message : messages) {
-        if (message.message.role == MessageRole::Assistant) lastAssistantReply_ = message.message.content;
-    }
 }
 
 QString MainWindow::conversationId() const { return conversationId_; }
@@ -292,15 +297,7 @@ void MainWindow::applyUiConfig(const UiConfig& config)
         conversationWindow_->setConversationAvatarPath(
             resolveConfiguredAssetPath(uiConfig_.conversationAvatarPath));
     }
-    ImageCompressionOptions compression;
-    compression.format = uiConfig_.captureImageFormat;
-    compression.maxWidth = uiConfig_.captureMaxWidth;
-    compression.quality = uiConfig_.captureQuality;
-    screenCapture_->configure(uiConfig_.screenCaptureEnabled,
-                              uiConfig_.screenCaptureIntervalMs,
-                              captureDirectory_, compression);
-    if (uiConfig_.screenCaptureEnabled) screenCapture_->start();
-    else screenCapture_->stop();
+    screenObservation_->applyConfiguration(uiConfig_);
 }
 
 void MainWindow::sendCurrentMessage()
@@ -308,14 +305,35 @@ void MainWindow::sendCurrentMessage()
     if (chatController_ == nullptr || !currentRequestId_.isEmpty()) return;
     const QString text = inputPanel_->text();
     if (text.isEmpty() || conversationId_.isEmpty()) return;
-    if (uiConfig_.screenCaptureEnabled && uiConfig_.captureOnChat) {
-        screenCapture_->captureNow();
-    }
+    screenObservation_->setBusy(true);
     ChatOptions options;
     options.stream = true;
-    const QString requestId = chatController_->sendMessage(conversationId_, text, options);
-    if (requestId.isEmpty()) return;
+    QString requestId;
+    if (uiConfig_.screenCaptureEnabled && uiConfig_.captureOnChat) {
+        CapturedImage captured;
+        AppError captureError;
+        if (!screenObservation_->captureForChat(&captured, &captureError)) {
+            screenObservation_->setBusy(false);
+            return;
+        }
+        MessageImage attachment;
+        attachment.data = captured.data;
+        attachment.mimeType = captured.format == QStringLiteral("webp")
+            ? QStringLiteral("image/webp") : QStringLiteral("image/jpeg");
+        attachment.detail = QStringLiteral("original");
+        requestId = chatController_->sendUserMessageWithScreenshot(
+            conversationId_, text, attachment, captured.fingerprint,
+            captured.capturedAt, options);
+    } else {
+        requestId = chatController_->sendMessage(conversationId_, text, options);
+    }
+    if (requestId.isEmpty()) {
+        screenObservation_->setBusy(false);
+        return;
+    }
     currentRequestId_ = requestId;
+    // 用户主动附图仍属于普通聊天，可沿用失败重试语义。
+    currentRequestIsScreenshot_ = false;
     streamingReplyStarted_ = false;
     conversationWindow_->appendMessage(MessageRole::User, text);
     inputPanel_->clear();
@@ -326,9 +344,14 @@ void MainWindow::sendCurrentMessage()
 void MainWindow::retryLastMessage()
 {
     if (chatController_ == nullptr || !currentRequestId_.isEmpty()) return;
+    screenObservation_->setBusy(true);
     const QString requestId = chatController_->retryLast();
-    if (requestId.isEmpty()) return;
+    if (requestId.isEmpty()) {
+        screenObservation_->setBusy(false);
+        return;
+    }
     currentRequestId_ = requestId;
+    currentRequestIsScreenshot_ = false;
     streamingReplyStarted_ = false;
     errorBanner_->dismiss();
     inputPanel_->setBusy(true);
@@ -363,31 +386,68 @@ void MainWindow::onReplyDelta(const QString& requestId, const QString& delta)
 void MainWindow::onReplyFinished(const QString& requestId, const QString& content)
 {
     if (!isCurrentRequest(requestId)) return;
+    const bool screenshotRequest = currentRequestIsScreenshot_;
     if (!streamingReplyStarted_) replyBubble_->beginReply();
     replyBubble_->finishReply(content);
-    conversationWindow_->finishAssistantReply(content);
+    if (!screenshotRequest) conversationWindow_->finishAssistantReply(content);
     attachments_->reposition();
-    lastAssistantReply_ = content;
     currentRequestId_.clear();
+    currentRequestIsScreenshot_ = false;
     streamingReplyStarted_ = false;
     inputPanel_->setBusy(false);
     inputPanel_->setRetryEnabled(false);
     inputPanel_->focusInput();
     if (conversationController_ != nullptr) conversationController_->switchConversation(conversationId_);
+    if (screenshotRequest) screenObservation_->finishScheduledRequest();
+    else screenObservation_->setBusy(false);
 }
 
 void MainWindow::onRequestFailed(const QString& requestId, const ModelError& error)
 {
     if (!isCurrentRequest(requestId)) return;
+    const bool screenshotRequest = currentRequestIsScreenshot_;
     currentRequestId_.clear();
+    currentRequestIsScreenshot_ = false;
     streamingReplyStarted_ = false;
     inputPanel_->setBusy(false);
-    inputPanel_->setRetryEnabled(error.retryable);
+    inputPanel_->setRetryEnabled(!screenshotRequest && error.retryable);
     if (errorCenter_ == nullptr) {
         errorBanner_->showError(errorPresenter_.message(error), error.retryable);
         attachments_->reposition();
     }
     if (conversationController_ != nullptr) conversationController_->switchConversation(conversationId_);
+    if (screenshotRequest) screenObservation_->finishScheduledRequest();
+    else screenObservation_->setBusy(false);
+}
+
+void MainWindow::onScreenCaptured(const CapturedImage& image)
+{
+    if (chatController_ == nullptr || conversationId_.isEmpty()
+        || !currentRequestId_.isEmpty()) {
+        screenObservation_->finishScheduledRequest();
+        return;
+    }
+    MessageImage attachment;
+    attachment.data = image.data;
+    attachment.mimeType = image.format == QStringLiteral("webp")
+        ? QStringLiteral("image/webp") : QStringLiteral("image/jpeg");
+    attachment.detail = QStringLiteral("original");
+    ChatOptions options;
+    // DeepSeek 视觉接口当前按普通 JSON 返回；截图请求不走 SSE 流式解析。
+    options.stream = false;
+    options.disableThinking = true;
+    const QString requestId = chatController_->sendScreenshotMessage(
+        conversationId_, QStringLiteral("请分析当前屏幕内容，并用自然、简洁的方式回应。"),
+        attachment, image.fingerprint, image.capturedAt, options);
+    if (requestId.isEmpty()) {
+        screenObservation_->finishScheduledRequest();
+        return;
+    }
+    currentRequestId_ = requestId;
+    currentRequestIsScreenshot_ = true;
+    streamingReplyStarted_ = false;
+    inputPanel_->setBusy(true);
+    inputPanel_->setRetryEnabled(false);
 }
 
 void MainWindow::onOperationFailed(const AppError& error)
@@ -409,13 +469,15 @@ void MainWindow::onCurrentConversationChanged(
     const QVector<ConversationMessage>& messages)
 {
     conversationId_ = conversationId;
+    screenObservation_->setObservationReady(chatController_ != nullptr
+                                             && !conversationId_.isEmpty());
     conversationWindow_->setConversation(conversationId, title, messages);
 }
 
 void MainWindow::openSettings()
 {
     if (settingsController_ == nullptr) return;
-    SettingsDialog dialog(settingsController_, this, screenCapture_);
+    SettingsDialog dialog(settingsController_, this, screenObservation_->screenCapture());
     dialog.exec();
 }
 

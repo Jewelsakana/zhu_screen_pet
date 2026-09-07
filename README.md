@@ -55,13 +55,18 @@ JSON 配置、Qt 运行库与插件、OpenSSL 以及可再分发的 VC++ CRT DLL
 - Phase 1 基础服务：路径、JSONL 日志、QSettings、SQLite/WAL、后台任务、异步 HTTP、Windows 凭据存储接口、窗口位置管理和系统托盘
 - Phase 2 模型基础：异步 `ChatProvider`、Mock Provider、OpenAI-compatible Provider、DeepSeek Provider、JSON 解析、超时/重试/退避和模型日志
 - Phase 3 记忆层：SQLite 会话与消息持久化、记忆检索、最近上下文和 token 预算裁剪
+- 未完成：长期记忆的自动提取、会话摘要、去重和维护流程；当前仅具备存储与检索基础能力
 - Phase 4 聊天 MVP：历史恢复、输入发送、SSE 流式显示、取消、失败重试、复制回复、人格提示和桌宠状态
+- 屏幕视觉基础：定时/对话后截图、JPEG/WebP 压缩、Base64 内联多模态请求、单请求阻断、截图生命周期清理、桌宠窗口排除和 3% 屏幕指纹去重
 - 从旧 `ScreenPet/Screen Pet` 数据目录和 Credential service 幂等迁移配置、会话与密钥，迁移过程不覆盖新数据且保留旧数据
 
 应用随附的磁盘配置默认启用 Mock Provider，因此无需联网即可测试完整聊天闭环。
 真实 Provider 的 API Key 从 Windows Credential Manager 读取，不会写入 JSON 或日志。
 
-当前尚未实现透明桌宠动画、截图、OCR 和屏幕观察功能，这些属于后续阶段。
+当前已支持把截图作为临时图片附件发送给兼容 OpenAI Chat Completions 的多模态模型。
+截图图片和 Base64 不写入 SQLite 或日志；自动截图结果作为有时效的 `observation_events`
+保存，不再占用普通聊天短期记忆。普通聊天只额外注入最新一条未过期的屏幕观察摘要。
+OCR 和透明桌宠动画仍属于后续阶段。启用截图发送前，请确保当前配置的是支持图片输入的模型。
 
 人格参数和模型错误提示同样由磁盘配置驱动，项目模板位于
 [app-settings.json](D:/zhu_screen_pet/config/app-settings.json)。
@@ -79,9 +84,9 @@ JSON 配置、Qt 运行库与插件、OpenSSL 以及可再分发的 VC++ CRT DLL
     {
       "id": "deepseek-chat",
       "provider_type": "deepseek",
-      "display_name": "DeepSeek Chat",
+      "display_name": "DeepSeek Vision",
       "base_url": "https://api.deepseek.com",
-      "model": "deepseek-v4-flash",
+      "model": "deepseek-v4-flash-vision-exp",
       "credential_service": "zhu_screen_pet",
       "credential_account": "deepseek-api-key",
       "timeout_ms": 30000,

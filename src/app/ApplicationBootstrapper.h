@@ -22,6 +22,7 @@ class ChatProviderFactory;
 class ProviderManager;
 class SqliteConversationRepository;
 class SqliteMemoryRepository;
+class SqliteObservationRepository;
 class MemoryOrchestrator;
 class ChatController;
 class ConversationController;
@@ -61,6 +62,7 @@ private:
     std::unique_ptr<Database> database_;
     std::unique_ptr<SqliteConversationRepository> conversations_;
     std::unique_ptr<SqliteMemoryRepository> memories_;
+    std::unique_ptr<SqliteObservationRepository> observations_;
     std::unique_ptr<MemoryOrchestrator> memoryOrchestrator_;
     std::unique_ptr<HttpClient> httpClient_;
     std::unique_ptr<SecretStore> secretStore_;

@@ -77,7 +77,9 @@ Result<qint64> SqliteMemoryRepository::saveResult(const MemoryItem& item)
     query.prepare(QStringLiteral("INSERT INTO memories(kind,content,source_event_id,created_at,expires_at) "
                                  "VALUES(?,?,?,?,?)"));
     query.addBindValue(item.kind.isEmpty() ? QStringLiteral("short_term") : item.kind);
-    query.addBindValue(item.content); query.addBindValue(item.sourceEventId);
+    query.addBindValue(item.content);
+    if (item.sourceEventId.trimmed().isEmpty()) query.addBindValue(QVariant(QVariant::String));
+    else query.addBindValue(item.sourceEventId.trimmed());
     query.addBindValue(serializeTime(item.createdAt.isValid()
                                         ? item.createdAt : QDateTime::currentDateTimeUtc()));
     if (item.expiresAt.isValid()) query.addBindValue(serializeTime(item.expiresAt));

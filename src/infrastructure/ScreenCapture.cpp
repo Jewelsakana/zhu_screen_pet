@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "infrastructure/ImageCompressor.h"
+#include "infrastructure/ScreenFingerprint.h"
 
 namespace zhu_screen_pet {
 
@@ -35,6 +36,11 @@ void ScreenCapture::configure(bool enabled, int intervalMs, QString captureDirec
     }
 }
 
+void ScreenCapture::setCaptureDirectory(const QString& captureDirectory)
+{
+    captureDirectory_ = captureDirectory;
+}
+
 void ScreenCapture::start()
 {
     if (!enabled_) return;
@@ -51,9 +57,43 @@ bool ScreenCapture::isEnabled() const
     return enabled_;
 }
 
-bool ScreenCapture::captureNow(QString* errorMessage)
+bool ScreenCapture::captureNow(QString* errorMessage, CaptureTrigger trigger)
 {
-    return captureInternal(errorMessage);
+    CapturedImage image;
+    if (!captureInternal(&image, errorMessage, trigger,
+                         trigger == CaptureTrigger::Manual)) {
+        return false;
+    }
+    emit captured(image);
+    return true;
+}
+
+bool ScreenCapture::captureImage(CapturedImage* image, QString* errorMessage,
+                                 CaptureTrigger trigger)
+{
+    if (image == nullptr) {
+        if (errorMessage) *errorMessage = QStringLiteral("截图输出不能为空");
+        return false;
+    }
+    return captureInternal(image, errorMessage, trigger, false);
+}
+
+bool ScreenCapture::removeCapture(const QString& filePath, QString* errorMessage) const
+{
+    if (filePath.isEmpty()) return true;
+    const QFileInfo fileInfo(filePath);
+    const QDir captureDirectory(captureDirectory_);
+    const QString expectedDirectory = QDir::cleanPath(captureDirectory.absolutePath());
+    if (QDir::cleanPath(fileInfo.absolutePath()) != expectedDirectory
+        || !fileInfo.fileName().startsWith(QStringLiteral("capture_"))) {
+        if (errorMessage) *errorMessage = QStringLiteral("拒绝删除截图目录之外的文件");
+        return false;
+    }
+    if (!fileInfo.exists() || QFile::remove(fileInfo.absoluteFilePath())) return true;
+    if (errorMessage) {
+        *errorMessage = QStringLiteral("无法删除截图文件: %1").arg(fileInfo.absoluteFilePath());
+    }
+    return false;
 }
 
 bool ScreenCapture::clearCaptures(QString* errorMessage) const
@@ -80,11 +120,16 @@ bool ScreenCapture::clearCaptures(QString* errorMessage) const
 void ScreenCapture::captureOnTimer()
 {
     QString error;
-    if (!captureInternal(&error)) emit captureFailed(error);
+    if (!captureNow(&error, CaptureTrigger::Scheduled)) emit captureFailed(error);
 }
 
-bool ScreenCapture::captureInternal(QString* errorMessage)
+bool ScreenCapture::captureInternal(CapturedImage* output, QString* errorMessage,
+                                    CaptureTrigger trigger, bool persistToDisk)
 {
+    if (output == nullptr) {
+        if (errorMessage) *errorMessage = QStringLiteral("截图输出不能为空");
+        return false;
+    }
     QScreen* screen = QGuiApplication::primaryScreen();
     if (screen == nullptr) {
         if (errorMessage) *errorMessage = QStringLiteral("当前没有可用的显示器");
@@ -95,17 +140,20 @@ bool ScreenCapture::captureInternal(QString* errorMessage)
         if (errorMessage) *errorMessage = QStringLiteral("无法获取屏幕图像");
         return false;
     }
+    const QImage sourceImage = pixmap.toImage();
     CapturedImage result;
     result.capturedAt = QDateTime::currentDateTimeUtc();
+    result.trigger = trigger;
+    result.fingerprint = ScreenFingerprint::create(sourceImage);
     QString actualFormat;
     QString compressionError;
-    if (!ImageCompressor::compress(pixmap.toImage(), options_, &result.data, &actualFormat,
+    if (!ImageCompressor::compress(sourceImage, options_, &result.data, &actualFormat,
                                    &result.size, &compressionError)) {
         if (errorMessage) *errorMessage = compressionError;
         return false;
     }
     result.format = actualFormat;
-    if (!captureDirectory_.isEmpty()) {
+    if (persistToDisk && !captureDirectory_.isEmpty()) {
         if (!QDir().mkpath(captureDirectory_)) {
             if (errorMessage) *errorMessage = QStringLiteral("无法创建截图目录: %1")
                 .arg(captureDirectory_);
@@ -121,7 +169,7 @@ bool ScreenCapture::captureInternal(QString* errorMessage)
         }
         result.filePath = path;
     }
-    emit captured(result);
+    *output = std::move(result);
     return true;
 }
 

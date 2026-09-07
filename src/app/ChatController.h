@@ -2,6 +2,7 @@
 
 #include <QHash>
 #include <QObject>
+#include <QDateTime>
 
 #include "memory/MemoryOrchestrator.h"
 #include "app/PersonaConfig.h"
@@ -28,6 +29,18 @@ public:
      */
     QString sendMessage(const QString& conversationId, const QString& text,
                         const ChatOptions& options = ChatOptions{});
+    /** 发送一次带临时截图附件的截图对话；图片不会写入会话历史。 */
+    QString sendScreenshotMessage(const QString& conversationId, const QString& text,
+                                  const MessageImage& image,
+                                  const QByteArray& fingerprint,
+                                  const QDateTime& capturedAt,
+                                  const ChatOptions& options = ChatOptions{});
+    /** 发送用户文本及截图附件，并把该请求作为普通会话消息持久化。 */
+    QString sendUserMessageWithScreenshot(
+        const QString& conversationId, const QString& text,
+        const MessageImage& image, const QByteArray& fingerprint,
+        const QDateTime& capturedAt,
+        const ChatOptions& options = ChatOptions{});
     /** 重新发送最近一次失败请求，不会重复写入用户消息。 */
     QString retryLast();
     /** 请求 Provider 取消指定聊天；最终状态仍由 requestFailed 通知。 */
@@ -62,17 +75,24 @@ signals:
 private:
     struct PendingChat
     {
+        ChatRequestKind kind = ChatRequestKind::Normal;
         QString conversationId;
         QString userText;
         QString accumulatedReply;
         std::vector<Message> context;
         ChatOptions options;
+        QByteArray observationFingerprint;
+        QDateTime observationCapturedAt;
     };
 
     void onChatStarted(const QString& requestId);
     void onChatDelta(const QString& requestId, const QString& delta);
     void onChatFinished(const QString& requestId, const ChatResult& result);
     QString startPending(PendingChat pending);
+    QString sendMessageInternal(const QString& conversationId, const QString& text,
+                                const MessageImage* image, const QByteArray& fingerprint,
+                                const QDateTime& capturedAt, ChatRequestKind requestKind,
+                                ChatOptions options);
     void setState(PetState state);
     void fail(const AppError& error);
 

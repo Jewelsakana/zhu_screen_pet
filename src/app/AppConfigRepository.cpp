@@ -108,6 +108,10 @@ bool AppConfigRepository::load(PersonaConfig* persona,
             loadedUi.screenCaptureEnabled = uiObject.value(
                 QStringLiteral("screen_capture_enabled")).toBool();
         }
+        if (uiObject.contains(QStringLiteral("automatic_screen_analysis_enabled"))) {
+            loadedUi.automaticScreenAnalysisEnabled = uiObject.value(
+                QStringLiteral("automatic_screen_analysis_enabled")).toBool();
+        }
         if (uiObject.contains(QStringLiteral("screen_capture_interval_ms"))) {
             loadedUi.screenCaptureIntervalMs = uiObject.value(
                 QStringLiteral("screen_capture_interval_ms")).toInt();
@@ -193,6 +197,8 @@ bool AppConfigRepository::save(const PersonaConfig& source, const MemoryLimits& 
         uiObject.insert(QStringLiteral("conversation_avatar_path"),
                         normalizedUi.conversationAvatarPath);
         uiObject.insert(QStringLiteral("screen_capture_enabled"), normalizedUi.screenCaptureEnabled);
+        uiObject.insert(QStringLiteral("automatic_screen_analysis_enabled"),
+                        normalizedUi.automaticScreenAnalysisEnabled);
         uiObject.insert(QStringLiteral("screen_capture_interval_ms"),
                         normalizedUi.screenCaptureIntervalMs);
         uiObject.insert(QStringLiteral("capture_on_chat"), normalizedUi.captureOnChat);

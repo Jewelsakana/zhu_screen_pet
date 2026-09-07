@@ -1,0 +1,24 @@
+name: Windows CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Qt 5.15.2
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: 5.15.2
+          arch: win64_msvc2019_64
+          tools: tools_openssl_x64
+          cache: true
+      - name: Configure
+        run: cmake -S . -B build -A x64 -DZHU_SCREEN_PET_BUILD_TESTS=ON
+      - name: Build and link
+        run: cmake --build build --config Debug --parallel
+      - name: Test
+        run: ctest --test-dir build -C Debug --output-on-failure

@@ -33,8 +33,13 @@ bool ModelProviderConfig::validate(QString* errorMessage) const
         && config.providerType != QStringLiteral("deepseek")) {
         return fail(QStringLiteral("unsupported model provider type: %1").arg(config.providerType));
     }
-    if (config.timeoutMs <= 0 || config.maxRetries < 0 || config.retryBaseDelayMs <= 0) {
-        return fail(QStringLiteral("model timeout and retry settings are invalid"));
+    if (config.timeoutMs < MinimumTimeoutMs || config.timeoutMs > MaximumTimeoutMs
+        || config.maxRetries < MinimumRetries || config.maxRetries > MaximumRetries
+        || config.retryBaseDelayMs < MinimumRetryBaseDelayMs
+        || config.retryBaseDelayMs > MaximumRetryBaseDelayMs) {
+        return fail(QStringLiteral(
+            "model timeout/retry settings are out of range "
+            "(timeout 100..600000 ms, retries 0..5, retry delay 50..30000 ms)"));
     }
     if (config.providerType == QStringLiteral("mock")) {
         if (config.displayName.isEmpty()) return fail(QStringLiteral("provider display name must not be empty"));

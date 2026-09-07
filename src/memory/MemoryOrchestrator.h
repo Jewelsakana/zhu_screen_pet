@@ -3,6 +3,7 @@
 #include "memory/ConversationRepository.h"
 #include "memory/MemoryContext.h"
 #include "memory/MemoryRepository.h"
+#include "memory/ObservationRepository.h"
 
 namespace zhu_screen_pet {
 
@@ -11,7 +12,8 @@ class MemoryOrchestrator final
 {
 public:
     explicit MemoryOrchestrator(ConversationRepository* conversations,
-                                MemoryRepository* memories = nullptr);
+                                MemoryRepository* memories = nullptr,
+                                ObservationRepository* observations = nullptr);
 
     MemoryContext buildContext(const ContextRequest& request,
                                QString* errorMessage = nullptr) const;
@@ -20,9 +22,11 @@ public:
     MemoryLimits limits() const;
     bool appendMessage(const QString& conversationId, const Message& message,
                        QString* errorMessage = nullptr);
+    bool appendObservation(const ObservationEvent& observation,
+                           QString* errorMessage = nullptr);
     QVector<MemoryItem> retrieveRelevant(const QString& query, int limit,
                                          QString* errorMessage = nullptr) const;
-    /** Phase 6 的长期摘要扩展点；当前版本不修改原始消息。 */
+    /** 未完成功能：长期记忆自动提取与会话摘要扩展点；当前版本不修改任何数据。 */
     bool summarizeIfNeeded(const QString& conversationId, QString* errorMessage = nullptr);
 
     static int estimateTokens(const QString& text);
@@ -30,6 +34,7 @@ public:
 private:
     ConversationRepository* conversations_ = nullptr;
     MemoryRepository* memories_ = nullptr;
+    ObservationRepository* observations_ = nullptr;
     MemoryLimits limits_;
 };
 

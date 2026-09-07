@@ -13,6 +13,7 @@
 #include <QVBoxLayout>
 
 #include "app/SettingsController.h"
+#include "infrastructure/DesktopWindowPolicy.h"
 #include "infrastructure/ScreenCapture.h"
 #include "app/ErrorCenter.h"
 
@@ -33,6 +34,7 @@ SettingsDialog::SettingsDialog(SettingsController* controller, QWidget* parent,
 {
     setWindowTitle(QStringLiteral("设置"));
     setObjectName(QStringLiteral("settingsDialog"));
+    DesktopWindowPolicy::setExcludedFromCapture(this, true);
     resize(560, 780);
     setStyleSheet(QStringLiteral(
         "QDialog#settingsDialog{background:#fffaf0;color:#26375d;}"
@@ -62,9 +64,12 @@ SettingsDialog::SettingsDialog(SettingsController* controller, QWidget* parent,
     apiKey_->setObjectName(QStringLiteral("settingsApiKey"));
     apiKey_->setEchoMode(QLineEdit::Password);
     apiKey_->setPlaceholderText(QStringLiteral("留空表示保持 Credential Manager 中的密钥"));
-    timeoutMs_ = spin(modelBox, 100, 600000);
-    maxRetries_ = spin(modelBox, 0, 10);
-    retryDelayMs_ = spin(modelBox, 50, 30000);
+    timeoutMs_ = spin(modelBox, ModelProviderConfig::MinimumTimeoutMs,
+                      ModelProviderConfig::MaximumTimeoutMs);
+    maxRetries_ = spin(modelBox, ModelProviderConfig::MinimumRetries,
+                       ModelProviderConfig::MaximumRetries);
+    retryDelayMs_ = spin(modelBox, ModelProviderConfig::MinimumRetryBaseDelayMs,
+                         ModelProviderConfig::MaximumRetryBaseDelayMs);
     modelForm->addRow(QStringLiteral("配置档案"), profile_);
     modelForm->addRow(QStringLiteral("Provider 类型"), providerType_);
     modelForm->addRow(QStringLiteral("档案 ID"), profileId_);
@@ -115,12 +120,30 @@ SettingsDialog::SettingsDialog(SettingsController* controller, QWidget* parent,
 
     auto* captureBox = new QGroupBox(QStringLiteral("屏幕截图"), this);
     auto* captureForm = new QFormLayout(captureBox);
-    screenCaptureEnabled_ = new QCheckBox(QStringLiteral("启用屏幕截图"), captureBox);
+    screenCaptureEnabled_ = new QCheckBox(
+        QStringLiteral("允许把屏幕截图发送给当前模型"), captureBox);
     screenCaptureEnabled_->setObjectName(QStringLiteral("settingsScreenCaptureEnabled"));
+    auto* capturePermissionRow = new QWidget(captureBox);
+    auto* capturePermissionLayout = new QHBoxLayout(capturePermissionRow);
+    capturePermissionLayout->setContentsMargins(0, 0, 0, 0);
+    capturePermissionLayout->setSpacing(6);
+    auto* capturePrivacyHelp = new QPushButton(QStringLiteral("?"), capturePermissionRow);
+    capturePrivacyHelp->setObjectName(QStringLiteral("settingsCapturePrivacyHelp"));
+    capturePrivacyHelp->setAccessibleName(QStringLiteral("查看屏幕截图隐私提醒"));
+    capturePrivacyHelp->setToolTip(QStringLiteral("查看屏幕截图隐私提醒"));
+    capturePrivacyHelp->setFixedSize(24, 24);
+    capturePermissionLayout->addWidget(screenCaptureEnabled_);
+    capturePermissionLayout->addWidget(capturePrivacyHelp);
+    capturePermissionLayout->addStretch();
+    automaticScreenAnalysisEnabled_ = new QCheckBox(
+        QStringLiteral("定时截图并自动发送给模型（可能产生费用）"), captureBox);
+    automaticScreenAnalysisEnabled_->setObjectName(
+        QStringLiteral("settingsAutomaticScreenAnalysisEnabled"));
     screenCaptureIntervalSeconds_ = spin(captureBox, 1, 600);
     screenCaptureIntervalSeconds_->setSuffix(QStringLiteral(" 秒"));
     screenCaptureIntervalSeconds_->setObjectName(QStringLiteral("settingsScreenCaptureInterval"));
-    captureOnChat_ = new QCheckBox(QStringLiteral("发送对话时额外截图一次"), captureBox);
+    captureOnChat_ = new QCheckBox(
+        QStringLiteral("随本次用户消息附带截图（不额外发起请求）"), captureBox);
     captureOnChat_->setObjectName(QStringLiteral("settingsCaptureOnChat"));
     captureImageFormat_ = new QComboBox(captureBox);
     captureImageFormat_->addItem(QStringLiteral("JPEG"), QStringLiteral("jpeg"));
@@ -132,7 +155,8 @@ SettingsDialog::SettingsDialog(SettingsController* controller, QWidget* parent,
     captureQuality_ = spin(captureBox, 1, 100);
     captureQuality_->setSuffix(QStringLiteral("%"));
     captureQuality_->setObjectName(QStringLiteral("settingsCaptureQuality"));
-    captureForm->addRow(screenCaptureEnabled_);
+    captureForm->addRow(capturePermissionRow);
+    captureForm->addRow(automaticScreenAnalysisEnabled_);
     captureForm->addRow(QStringLiteral("自动截图间隔"), screenCaptureIntervalSeconds_);
     captureForm->addRow(captureOnChat_);
     captureForm->addRow(QStringLiteral("图像格式"), captureImageFormat_);
@@ -142,6 +166,14 @@ SettingsDialog::SettingsDialog(SettingsController* controller, QWidget* parent,
     captureTestButton_->setObjectName(QStringLiteral("settingsCaptureTestButton"));
     captureTestButton_->setEnabled(screenCapture_ != nullptr);
     captureForm->addRow(captureTestButton_);
+    connect(capturePrivacyHelp, &QPushButton::clicked, this, [this]() {
+        QMessageBox::information(
+            this, QStringLiteral("屏幕截图隐私提醒"),
+            QStringLiteral("注意：启用后，屏幕截图会发送给当前配置的远程模型。"
+                           "你的隐私信息可能会被截图并发送到远端，"
+                           "一定要注意在隐私页面关闭截屏。"),
+            QMessageBox::Ok);
+    });
     connect(captureTestButton_, &QPushButton::clicked, this, [this]() {
         if (screenCapture_ == nullptr) return;
         QString error;
@@ -149,6 +181,14 @@ SettingsDialog::SettingsDialog(SettingsController* controller, QWidget* parent,
             status_->setText(QStringLiteral("截图成功，已保存到 captures 目录"));
         } else {
             status_->setText(QStringLiteral("截图失败：%1").arg(error));
+        }
+    });
+    connect(screenCaptureEnabled_, &QCheckBox::toggled, this, [this](bool enabled) {
+        automaticScreenAnalysisEnabled_->setEnabled(enabled);
+        captureOnChat_->setEnabled(enabled);
+        if (!enabled) {
+            automaticScreenAnalysisEnabled_->setChecked(false);
+            captureOnChat_->setChecked(false);
         }
     });
 
@@ -208,6 +248,9 @@ void SettingsDialog::populate()
     bubbleDurationSeconds_->setValue(controller_->uiConfig().replyBubbleDurationMs / 1000);
     const UiConfig ui = controller_->uiConfig();
     screenCaptureEnabled_->setChecked(ui.screenCaptureEnabled);
+    automaticScreenAnalysisEnabled_->setChecked(ui.automaticScreenAnalysisEnabled);
+    automaticScreenAnalysisEnabled_->setEnabled(ui.screenCaptureEnabled);
+    captureOnChat_->setEnabled(ui.screenCaptureEnabled);
     screenCaptureIntervalSeconds_->setValue(ui.screenCaptureIntervalMs / 1000);
     captureOnChat_->setChecked(ui.captureOnChat);
     captureImageFormat_->setCurrentIndex(captureImageFormat_->findData(ui.captureImageFormat));
@@ -275,11 +318,24 @@ void SettingsDialog::applySettings()
     UiConfig ui = controller_->uiConfig();
     ui.replyBubbleDurationMs = bubbleDurationSeconds_->value() * 1000;
     ui.screenCaptureEnabled = screenCaptureEnabled_->isChecked();
+    ui.automaticScreenAnalysisEnabled = automaticScreenAnalysisEnabled_->isChecked();
     ui.screenCaptureIntervalMs = screenCaptureIntervalSeconds_->value() * 1000;
     ui.captureOnChat = captureOnChat_->isChecked();
     ui.captureImageFormat = captureImageFormat_->currentData().toString();
     ui.captureMaxWidth = captureMaxWidth_->value();
     ui.captureQuality = captureQuality_->value();
+    const UiConfig previousUi = controller_->uiConfig();
+    const bool enablesRemoteCapture = ui.screenCaptureEnabled
+        && ((ui.automaticScreenAnalysisEnabled
+             && !previousUi.automaticScreenAnalysisEnabled)
+            || (ui.captureOnChat && !previousUi.captureOnChat));
+    if (enablesRemoteCapture
+        && QMessageBox::warning(
+            this, QStringLiteral("确认发送屏幕内容"),
+            QStringLiteral("启用后，屏幕截图会发送给当前配置的远端模型，可能包含隐私信息并产生模型费用。是否继续？"),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) {
+        return;
+    }
     AppError error;
     if (!controller_->apply(model, persona, limits, ui, apiKey_->text(), &error)) {
         if (error.code == AppErrorCode::Busy) {

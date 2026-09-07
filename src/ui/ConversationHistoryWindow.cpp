@@ -60,12 +60,44 @@ ConversationHistoryWindow::ConversationHistoryWindow(QWidget* parent)
     connect(scrollTimer_, &QTimer::timeout, this, [this]() {
         scrollArea_->verticalScrollBar()->setValue(scrollArea_->verticalScrollBar()->maximum());
     });
+    connect(scrollArea_->verticalScrollBar(), &QScrollBar::valueChanged, this,
+            [this](int value) {
+                if (!isVisible() || !hasOlderMessages_ || olderRequestPending_
+                    || value != scrollArea_->verticalScrollBar()->minimum()) return;
+                olderRequestPending_ = true;
+                emit olderMessagesRequested();
+            });
     root->addLayout(header);
     root->addWidget(scrollArea_, 1);
 
     connect(close, &QPushButton::clicked, this, &QWidget::hide);
     // 只能由会话列表主动打开，不能随父级窗口首次显示。
     hide();
+}
+
+void ConversationHistoryWindow::replaceMessagesPreservingPosition(
+    const QVector<ConversationMessage>& messages, bool hasOlderMessages)
+{
+    QScrollBar* scrollBar = scrollArea_->verticalScrollBar();
+    const int oldMaximum = scrollBar->maximum();
+    const int oldValue = scrollBar->value();
+    if (scrollTimer_->isActive()) scrollTimer_->stop();
+    clearMessages();
+    for (const ConversationMessage& message : messages) {
+        addMessageBubble(message.message.role, message.message.content);
+    }
+    hasOlderMessages_ = hasOlderMessages;
+    olderRequestPending_ = false;
+    QTimer::singleShot(0, this, [this, oldMaximum, oldValue]() {
+        QScrollBar* current = scrollArea_->verticalScrollBar();
+        current->setValue(oldValue + qMax(0, current->maximum() - oldMaximum));
+    });
+}
+
+void ConversationHistoryWindow::setHasOlderMessages(bool value)
+{
+    hasOlderMessages_ = value;
+    olderRequestPending_ = false;
 }
 
 QString ConversationHistoryWindow::conversationId() const

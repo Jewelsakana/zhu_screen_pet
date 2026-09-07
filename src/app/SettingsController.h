@@ -24,7 +24,7 @@ class ModelConfigRepository;
 class ProviderManager;
 class SecretStore;
 
-/** 设置应用服务：管理草稿校验、连接测试、原子持久化和运行时热更新。 */
+/** 设置应用服务：管理草稿校验、连接测试和运行时热更新。 */
 class SettingsController final : public QObject
 {
     Q_OBJECT
@@ -51,7 +51,7 @@ public:
     /** 异步发送最小请求测试候选配置，不改变当前 Provider 和磁盘文件。 */
     bool testConnection(const ModelProviderConfig& config, const QString& apiKey,
                         AppError* error = nullptr);
-    /** 校验、热切换并原子保存；任何失败都会尽力恢复旧运行时和磁盘配置。 */
+    /** 校验并执行可恢复保存事务；失败会报告任何未完成的回滚步骤。 */
     bool apply(const ModelProviderConfig& model, const PersonaConfig& persona,
                const MemoryLimits& limits, const QString& apiKey,
                AppError* error = nullptr);

@@ -34,6 +34,8 @@ public:
     bool createConversation(const QString& title = {}, AppError* error = nullptr);
     /** 切换到指定的未归档会话并加载其历史消息。 */
     bool switchConversation(const QString& conversationId, AppError* error = nullptr);
+    /** 每次增加 200 条历史窗口；供历史窗口滚动到顶部时渐进加载。 */
+    bool loadOlderMessages(AppError* error = nullptr);
     /** 归档指定会话；归档当前会话后自动切换到其他会话或创建新会话。 */
     bool archiveConversation(const QString& conversationId, AppError* error = nullptr);
     /** 归档当前会话。 */
@@ -49,6 +51,7 @@ public:
     QVector<Conversation> archivedConversations() const;
     /** 返回最近一次刷新得到的未归档会话。 */
     QVector<Conversation> conversations() const;
+    bool hasOlderMessages() const;
 
 signals:
     /** 当前可选会话列表发生变化。 */
@@ -57,6 +60,11 @@ signals:
     void currentConversationChanged(const QString& conversationId,
                                     const QString& title,
                                     const QVector<ConversationMessage>& messages);
+    /** 旧消息已加载；newlyLoaded 用于 UI 保持原阅读位置。 */
+    void olderMessagesLoaded(const QString& conversationId,
+                             const QVector<ConversationMessage>& messages,
+                             int newlyLoaded,
+                             bool hasOlderMessages);
     /** 会话操作失败，统一交给 ErrorCenter 路由。 */
     void operationFailed(const AppError& error);
 
@@ -79,6 +87,8 @@ private:
     QString currentConversationId_;
     QString currentConversationTitle_;
     QVector<ConversationMessage> currentConversationMessages_;
+    int loadedMessageLimit_ = 200;
+    bool hasOlderMessages_ = false;
 };
 
 } // namespace zhu_screen_pet

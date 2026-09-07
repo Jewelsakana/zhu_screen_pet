@@ -24,11 +24,17 @@ public:
     QString conversationId() const;
     void setConversation(const QString& id, const QString& title,
                          const QVector<ConversationMessage>& messages);
+    void replaceMessagesPreservingPosition(const QVector<ConversationMessage>& messages,
+                                           bool hasOlderMessages);
+    void setHasOlderMessages(bool value);
     void appendMessage(MessageRole role, const QString& content);
     void beginAssistantReply();
     void appendAssistantDelta(const QString& delta);
     void finishAssistantReply(const QString& content);
     void setPetAvatarPath(const QString& path);
+
+signals:
+    void olderMessagesRequested();
 
 private:
     QLabel* addMessageBubble(MessageRole role, const QString& content);
@@ -43,6 +49,8 @@ private:
     QLabel* streamingBubble_ = nullptr;
     QTimer* scrollTimer_ = nullptr;
     QString petAvatarPath_;
+    bool hasOlderMessages_ = false;
+    bool olderRequestPending_ = false;
 };
 
 } // namespace zhu_screen_pet

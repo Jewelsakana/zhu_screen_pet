@@ -39,6 +39,12 @@ bool UiConfig::validate(QString* errorMessage) const
         if (errorMessage) *errorMessage = QStringLiteral("不支持的截图格式");
         return false;
     }
+    if (!screenCaptureEnabled
+        && (automaticScreenAnalysisEnabled || captureOnChat)) {
+        if (errorMessage) *errorMessage = QStringLiteral(
+            "启用自动屏幕分析或随消息附图前，必须先允许向模型发送截图");
+        return false;
+    }
     return true;
 }
 

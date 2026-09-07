@@ -24,6 +24,7 @@
         "app_icon_path": "",
         "conversation_avatar_path": "",
         "screen_capture_enabled": false,
+        "automatic_screen_analysis_enabled": false,
         "screen_capture_interval_ms": 5000,
         "capture_on_chat": false,
         "capture_image_format": "jpeg",

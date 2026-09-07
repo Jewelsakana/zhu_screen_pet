@@ -1,6 +1,7 @@
 #include <QtTest/QtTest>
 #include <QDir>
 #include <QSignalSpy>
+#include <QSqlQuery>
 #include <QTemporaryDir>
 
 #include <algorithm>
@@ -12,6 +13,7 @@
 #include "memory/MemoryOrchestrator.h"
 #include "memory/SqliteConversationRepository.h"
 #include "memory/SqliteMemoryRepository.h"
+#include "memory/SqliteObservationRepository.h"
 #include "model/MockChatProvider.h"
 
 namespace zhu_screen_pet {
@@ -51,11 +53,32 @@ private slots:
         const QString id = conversations.createConversation(QStringLiteral("测试会话"), &errorMessage);
         QVERIFY2(!id.isEmpty(), qPrintable(errorMessage));
         SqliteMemoryRepository memories(&database);
+        SqliteObservationRepository observations(&database);
         MemoryOrchestrator orchestrator(&conversations, &memories);
         QVERIFY(orchestrator.appendMessage(id, Message::create(MessageRole::User, QStringLiteral("第一条")),
                                            &errorMessage));
         QVERIFY(orchestrator.appendMessage(id, Message::create(MessageRole::Assistant, QStringLiteral("第二条")),
                                            &errorMessage));
+        const QDateTime capturedAt = QDateTime::currentDateTimeUtc();
+        ObservationEvent firstObservation;
+        firstObservation.id = QStringLiteral("event-1");
+        firstObservation.conversationId = id;
+        firstObservation.summary = QStringLiteral("屏幕上显示咖啡清单");
+        firstObservation.fingerprint = QByteArrayLiteral("fingerprint-1");
+        firstObservation.capturedAt = capturedAt;
+        firstObservation.expiresAt = capturedAt.addSecs(600);
+        QVERIFY(observations.saveResult(firstObservation));
+        ObservationEvent secondObservation = firstObservation;
+        secondObservation.id = QStringLiteral("event-2");
+        secondObservation.summary = QStringLiteral("屏幕上显示咖啡记录");
+        secondObservation.fingerprint = QByteArrayLiteral("fingerprint-2");
+        secondObservation.capturedAt = capturedAt.addSecs(1);
+        secondObservation.expiresAt = capturedAt.addSecs(601);
+        QVERIFY(observations.saveResult(secondObservation));
+        const auto latestObservation = observations.latestValidResult(id, capturedAt.addSecs(2));
+        QVERIFY(latestObservation);
+        QVERIFY(latestObservation.value().has_value());
+        QCOMPARE(latestObservation.value()->id, QStringLiteral("event-2"));
         QVERIFY(memories.saveLongTerm(QStringLiteral("喜欢咖啡"), QStringLiteral("event-1"),
                                       &errorMessage) > 0);
         QVERIFY(memories.saveShortTerm(QStringLiteral("今天喝过咖啡"), QStringLiteral("event-2"),
@@ -76,6 +99,122 @@ private slots:
         QVERIFY(conversations.archiveConversation(id, &errorMessage));
         QVERIFY(conversations.listConversations(false).isEmpty());
         QCOMPARE(conversations.listConversations(true).size(), 1);
+    }
+
+    void observationExpiryAndMemorySourceForeignKeyAreEnforced()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        Database database;
+        QVERIFY(database.open(directory.filePath(QStringLiteral("observation-expiry.sqlite"))));
+        SqliteConversationRepository conversations(&database);
+        SqliteObservationRepository observations(&database);
+        SqliteMemoryRepository memories(&database);
+        const QString conversationId = conversations.createConversation(QStringLiteral("观察过期"));
+        const QDateTime now = QDateTime::currentDateTimeUtc();
+
+        ObservationEvent expired;
+        expired.id = QStringLiteral("expired-observation");
+        expired.conversationId = conversationId;
+        expired.summary = QStringLiteral("已经过期的屏幕状态");
+        expired.fingerprint = QByteArrayLiteral("expired-fingerprint");
+        expired.capturedAt = now.addSecs(-120);
+        expired.expiresAt = now.addSecs(-60);
+        QVERIFY(observations.saveResult(expired));
+
+        ObservationEvent current = expired;
+        current.id = QStringLiteral("current-observation");
+        current.summary = QStringLiteral("当前有效的屏幕状态");
+        current.fingerprint = QByteArrayLiteral("current-fingerprint");
+        current.capturedAt = now.addSecs(-10);
+        current.expiresAt = now.addSecs(590);
+        QVERIFY(observations.saveResult(current));
+
+        const auto latest = observations.latestValidResult(conversationId, now);
+        QVERIFY(latest);
+        QVERIFY(latest.value().has_value());
+        QCOMPARE(latest.value()->id, current.id);
+        QVERIFY(memories.saveLongTerm(QStringLiteral("来源于过期观察"), expired.id) > 0);
+        QString foreignKeyError;
+        QCOMPARE(memories.saveLongTerm(QStringLiteral("无效来源"),
+                                       QStringLiteral("missing-observation"),
+                                       &foreignKeyError), 0);
+        QVERIFY(!foreignKeyError.isEmpty());
+
+        QVERIFY(observations.removeExpiredResult(now));
+        QSqlQuery source(database.connection());
+        source.prepare(QStringLiteral(
+            "SELECT source_event_id FROM memories WHERE content='来源于过期观察'"));
+        QVERIFY(source.exec());
+        QVERIFY(source.next());
+        QVERIFY(source.value(0).isNull());
+        const auto stillCurrent = observations.latestValidResult(conversationId, now);
+        QVERIFY(stillCurrent);
+        QVERIFY(stillCurrent.value().has_value());
+        QCOMPARE(stillCurrent.value()->id, current.id);
+    }
+
+    void contextKeepsChatSeparateAndInjectsOnlyLatestValidObservation()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        Database database;
+        QVERIFY(database.open(directory.filePath(QStringLiteral("observation-context.sqlite"))));
+        SqliteConversationRepository conversations(&database);
+        SqliteMemoryRepository memories(&database);
+        SqliteObservationRepository observations(&database);
+        const QString conversationId = conversations.createConversation(QStringLiteral("观察上下文"));
+        QVERIFY(conversations.appendMessage(conversationId, Message::create(
+            MessageRole::User, QStringLiteral("正常用户消息"))));
+        QVERIFY(conversations.appendMessage(conversationId, Message::create(
+            MessageRole::Assistant, QStringLiteral("正常助手回复"))));
+        const QDateTime now = QDateTime::currentDateTimeUtc();
+
+        ObservationEvent valid;
+        valid.conversationId = conversationId;
+        valid.summary = QStringLiteral("编辑器正在显示一个编译错误");
+        valid.fingerprint = QByteArrayLiteral("valid-fingerprint");
+        valid.capturedAt = now.addSecs(-5);
+        valid.expiresAt = now.addSecs(595);
+        QVERIFY(observations.saveResult(valid));
+        ObservationEvent expired = valid;
+        expired.id = QStringLiteral("newer-but-expired");
+        expired.summary = QStringLiteral("不应注入的过期观察");
+        expired.fingerprint = QByteArrayLiteral("expired-fingerprint");
+        expired.capturedAt = now.addSecs(-1);
+        expired.expiresAt = now.addMSecs(-1);
+        QVERIFY(observations.saveResult(expired));
+
+        MemoryOrchestrator orchestrator(&conversations, &memories, &observations);
+        ContextRequest request;
+        request.conversationId = conversationId;
+        request.currentInput = QStringLiteral("这个问题怎么解决？");
+        request.maxMessages = 20;
+        request.maxTokens = 8000;
+        request.includeRelevantHistory = false;
+        QString error;
+        const MemoryContext context = orchestrator.buildContext(request, &error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QCOMPARE(conversations.recentMessages(conversationId, 20).size(), 2);
+        int observationCount = 0;
+        for (const Message& message : context.messages) {
+            if (message.content.contains(QStringLiteral("[不可信屏幕观察]"))) {
+                ++observationCount;
+                QCOMPARE(message.role, MessageRole::User);
+                QVERIFY(message.content.contains(valid.summary));
+                QVERIFY(!message.content.contains(expired.summary));
+            }
+        }
+        QCOMPARE(observationCount, 1);
+        QCOMPARE(context.messages.back().content, request.currentInput);
+
+        request.includeLatestObservation = false;
+        const MemoryContext withoutObservation = orchestrator.buildContext(request, &error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QVERIFY(std::none_of(withoutObservation.messages.cbegin(),
+                             withoutObservation.messages.cend(), [](const Message& message) {
+            return message.content.contains(QStringLiteral("[不可信屏幕观察]"));
+        }));
     }
 
     void memoryContextAllowsIndependentZeroLimitsAndDoesNotElevateReferences()
@@ -124,6 +263,33 @@ private slots:
                 }
             }
         }
+    }
+
+    void contextNeverKeepsAnOrphanAssistantMessage()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        Database database;
+        QVERIFY(database.open(directory.filePath(QStringLiteral("orphan-context.sqlite"))));
+        SqliteConversationRepository conversations(&database);
+        const QString id = conversations.createConversation(QStringLiteral("轮次裁剪"));
+        QVERIFY(conversations.appendMessage(id, Message::create(
+            MessageRole::User, QStringLiteral("很长的提问内容"))));
+        QVERIFY(conversations.appendMessage(id, Message::create(
+            MessageRole::Assistant, QStringLiteral("不应孤立保留的回复"))));
+        MemoryOrchestrator orchestrator(&conversations);
+        ContextRequest request;
+        request.conversationId = id;
+        request.currentInput = QStringLiteral("新问题");
+        request.maxMessages = 1;
+        request.maxTokens = 1000;
+        request.includeRelevantHistory = false;
+        QString error;
+        const MemoryContext context = orchestrator.buildContext(request, &error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QCOMPARE(static_cast<int>(context.messages.size()), 1);
+        QCOMPARE(context.messages.front().content, request.currentInput);
+        QVERIFY(context.truncated);
     }
 
     void ftsSearchFindsMessagesAndTracksSourceConversation()
@@ -324,6 +490,128 @@ private slots:
         QCOMPARE(context.at(2).content, QStringLiteral("第一轮回复"));
         QCOMPARE(context.at(3).content, QStringLiteral("第二轮"));
         QCOMPARE(provider.lastOptions().maxTokens, 321);
+    }
+
+    void screenshotChatUsesTransientImageAndPersistsObservationOnly()
+    {
+        QTemporaryDir temporaryDirectory;
+        Database database;
+        QVERIFY(database.open(QDir(temporaryDirectory.path()).filePath(
+            QStringLiteral("screenshot.sqlite"))));
+        SqliteConversationRepository conversations(&database);
+        const QString conversationId = conversations.createConversation(QStringLiteral("截图"));
+        SqliteObservationRepository observations(&database);
+        MemoryOrchestrator memory(&conversations, nullptr, &observations);
+        MockChatProvider provider(QStringLiteral("屏幕分析结果"));
+        ChatController controller(&provider, &memory);
+        QVERIFY(controller.setPersonaConfig(testPersona()));
+        QSignalSpy finishSpy(&controller, &ChatController::replyFinished);
+        MessageImage image;
+        image.data = QByteArrayLiteral("compressed-image");
+        image.mimeType = QStringLiteral("image/jpeg");
+        const QDateTime capturedAt = QDateTime::currentDateTimeUtc();
+        ObservationEvent previous;
+        previous.conversationId = conversationId;
+        previous.summary = QStringLiteral("不应加入新截图请求的旧观察");
+        previous.fingerprint = QByteArrayLiteral("previous-fingerprint");
+        previous.capturedAt = capturedAt.addSecs(-30);
+        previous.expiresAt = capturedAt.addSecs(570);
+        QVERIFY(observations.saveResult(previous));
+        const QString requestId = controller.sendScreenshotMessage(
+            conversationId, QStringLiteral("分析当前屏幕"), image,
+            QByteArrayLiteral("screen-fingerprint"), capturedAt);
+        QVERIFY(!requestId.isEmpty());
+        QVERIFY(finishSpy.wait(1000));
+        QCOMPARE(provider.lastOptions().requestKind, ChatRequestKind::Screenshot);
+        const std::vector<Message> context = provider.lastMessages();
+        QVERIFY(!context.empty());
+        QVERIFY(context.back().hasImage());
+        QCOMPARE(context.back().content, QStringLiteral("分析当前屏幕"));
+        QVERIFY(std::none_of(context.cbegin(), context.cend(), [](const Message& message) {
+            return message.content.contains(QStringLiteral("[不可信屏幕观察]"));
+        }));
+        const QVector<ConversationMessage> history = conversations.recentMessages(conversationId, 10);
+        QVERIFY(history.isEmpty());
+        const auto latest = observations.latestValidResult(
+            conversationId, capturedAt.addSecs(1));
+        QVERIFY(latest);
+        QVERIFY(latest.value().has_value());
+        QCOMPARE(latest.value()->summary, QStringLiteral("屏幕分析结果"));
+        QCOMPARE(latest.value()->fingerprint, QByteArrayLiteral("screen-fingerprint"));
+    }
+
+    void userChatWithScreenshotPersistsRealTextAndUsesOneNormalRequest()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        Database database;
+        QVERIFY(database.open(directory.filePath(QStringLiteral("chat-attachment.sqlite"))));
+        SqliteConversationRepository conversations(&database);
+        const QString id = conversations.createConversation(QStringLiteral("主动附图"));
+        MemoryOrchestrator memory(&conversations);
+        MockChatProvider provider(QStringLiteral("附图回复"));
+        ChatController controller(&provider, &memory);
+        QVERIFY(controller.setPersonaConfig(testPersona()));
+        QSignalSpy finished(&controller, &ChatController::replyFinished);
+        MessageImage image;
+        image.data = QByteArrayLiteral("compressed-image");
+        image.mimeType = QStringLiteral("image/jpeg");
+        const QString text = QStringLiteral("请看图帮我解释这个错误");
+        ChatOptions options;
+        options.stream = true;
+        QVERIFY(!controller.sendUserMessageWithScreenshot(
+            id, text, image, QByteArrayLiteral("chat-fingerprint"),
+            QDateTime::currentDateTimeUtc(), options).isEmpty());
+        QVERIFY(finished.wait(1000));
+        QCOMPARE(provider.requestCount(), 1);
+        QCOMPARE(provider.lastOptions().requestKind, ChatRequestKind::Normal);
+        QVERIFY(!provider.lastOptions().stream);
+        QVERIFY(provider.lastOptions().disableThinking);
+        QVERIFY(provider.lastMessages().back().hasImage());
+        QCOMPARE(provider.lastMessages().back().content, text);
+        const QVector<ConversationMessage> history = conversations.recentMessages(id, 10);
+        QCOMPARE(history.size(), 2);
+        QCOMPARE(history.at(0).message.role, MessageRole::User);
+        QCOMPARE(history.at(0).message.content, text);
+        QCOMPARE(history.at(1).message.role, MessageRole::Assistant);
+        QCOMPARE(history.at(1).message.content, QStringLiteral("附图回复"));
+    }
+
+    void failedScreenshotChatCannotBeRetried()
+    {
+        QTemporaryDir temporaryDirectory;
+        Database database;
+        QVERIFY(database.open(QDir(temporaryDirectory.path()).filePath(
+            QStringLiteral("screenshot-failure.sqlite"))));
+        SqliteConversationRepository conversations(&database);
+        const QString conversationId = conversations.createConversation(QStringLiteral("截图失败"));
+        SqliteObservationRepository observations(&database);
+        MemoryOrchestrator memory(&conversations, nullptr, &observations);
+        MockChatProvider provider(QStringLiteral("unused"));
+        AppError providerError;
+        providerError.code = AppErrorCode::Network;
+        providerError.message = QStringLiteral("network failure");
+        providerError.retryable = true;
+        provider.setError(providerError);
+        ChatController controller(&provider, &memory);
+        QVERIFY(controller.setPersonaConfig(testPersona()));
+        QSignalSpy failedSpy(&controller, &ChatController::requestFailed);
+        MessageImage image;
+        image.data = QByteArrayLiteral("compressed-image");
+        const QDateTime capturedAt = QDateTime::currentDateTimeUtc();
+        QVERIFY(!controller.sendScreenshotMessage(
+            conversationId, QStringLiteral("分析当前屏幕"), image,
+            QByteArrayLiteral("failed-fingerprint"), capturedAt).isEmpty());
+        QVERIFY(failedSpy.wait(1000));
+        const ModelError error = qvariant_cast<ModelError>(failedSpy.at(0).at(1));
+        QVERIFY(!error.retryable);
+        QVERIFY(controller.retryLast().isEmpty());
+        const QVector<ConversationMessage> history = conversations.recentMessages(conversationId, 10);
+        QVERIFY(history.isEmpty());
+        const auto latest = observations.latestValidResult(
+            conversationId, capturedAt.addSecs(1));
+        QVERIFY(latest);
+        QVERIFY(!latest.value().has_value());
     }
 
 };

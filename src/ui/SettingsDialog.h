@@ -55,6 +55,7 @@ private:
     QSpinBox* contextTokens_ = nullptr;
     QSpinBox* bubbleDurationSeconds_ = nullptr;
     QCheckBox* screenCaptureEnabled_ = nullptr;
+    QCheckBox* automaticScreenAnalysisEnabled_ = nullptr;
     QSpinBox* screenCaptureIntervalSeconds_ = nullptr;
     QCheckBox* captureOnChat_ = nullptr;
     QComboBox* captureImageFormat_ = nullptr;

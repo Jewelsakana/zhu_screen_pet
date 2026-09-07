@@ -15,6 +15,7 @@ struct DesktopWindowOptions
     bool showInTaskbar = false;
     bool acceptFocus = true;
     bool mouseInputTransparent = false;
+    bool excludeFromCapture = true;
 };
 
 /** 封装 Qt/Windows 顶层窗口标志，避免 UI 组件直接散落原生窗口调用。 */
@@ -27,6 +28,9 @@ public:
     /** 运行时切换鼠标穿透；透明区域需要点击桌面时使用。 */
     static bool setMouseInputTransparent(QWidget* window, bool enabled,
                                          QString* errorMessage = nullptr);
+    /** 将本进程的顶层窗口排除出 Windows 屏幕捕获；旧系统回退为仅显示器可见。 */
+    static bool setExcludedFromCapture(QWidget* window, bool excluded,
+                                       QString* errorMessage = nullptr);
 };
 
 } // namespace zhu_screen_pet

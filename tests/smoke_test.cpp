@@ -20,6 +20,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScreen>
+#include <QSqlDatabase>
 #include <QTextBrowser>
 #include <QTextEdit>
 #include <QTimer>
@@ -49,6 +50,7 @@
 #include "infrastructure/HttpClient.h"
 #include "infrastructure/ImageCompressor.h"
 #include "infrastructure/ScreenCapture.h"
+#include "infrastructure/ScreenFingerprint.h"
 #include "infrastructure/Logger.h"
 #include "infrastructure/SecretStore.h"
 #include "model/MockChatProvider.h"
@@ -56,10 +58,12 @@
 #include "model/ProviderManager.h"
 #include "memory/SqliteConversationRepository.h"
 #include "memory/SqliteMemoryRepository.h"
+#include "memory/SqliteObservationRepository.h"
 #include "memory/MemoryOrchestrator.h"
 #include "app/ChatController.h"
 #include "app/ConversationController.h"
 #include "app/SettingsController.h"
+#include "app/ScreenObservationCoordinator.h"
 #include "app/ModelErrorPresenter.h"
 #include "app/ErrorCenter.h"
 #include "app/PersonaConfig.h"
@@ -74,6 +78,42 @@
 #include "ui/ConversationWindow.h"
 
 namespace zhu_screen_pet {
+
+class ControllableChatProvider final : public ChatProvider
+{
+public:
+    QString startChat(const std::vector<Message>& messages,
+                      const ChatOptions& options) override
+    {
+        Q_UNUSED(messages);
+        Q_UNUSED(options);
+        activeRequestId_ = QUuid::createUuid().toString(QUuid::Id128);
+        ++requestCount_;
+        emit chatStarted(activeRequestId_);
+        return activeRequestId_;
+    }
+
+    void cancel(const QString& requestId) override
+    {
+        if (requestId != activeRequestId_) return;
+        finish(ChatResult::failure(
+            {ModelErrorCode::Cancelled, QStringLiteral("cancelled"), 0}));
+    }
+
+    void finish(const ChatResult& result)
+    {
+        if (activeRequestId_.isEmpty()) return;
+        const QString requestId = activeRequestId_;
+        activeRequestId_.clear();
+        emit chatFinished(requestId, result);
+    }
+
+    int requestCount() const { return requestCount_; }
+
+private:
+    QString activeRequestId_;
+    int requestCount_ = 0;
+};
 
 class SmokeTest final : public QObject
 {
@@ -221,6 +261,24 @@ private slots:
         QVERIFY(incomplete.normalized().model.isEmpty());
     }
 
+    void modelConfigurationLimitsAutomaticRetries()
+    {
+        ModelProviderConfig config;
+        config.profileId = QStringLiteral("retry-limits");
+        config.providerType = QStringLiteral("mock");
+        config.displayName = QStringLiteral("Retry Limits");
+        config.mockReply = QStringLiteral("ok");
+        config.timeoutMs = ModelProviderConfig::MaximumTimeoutMs;
+        config.maxRetries = ModelProviderConfig::MaximumRetries;
+        config.retryBaseDelayMs = ModelProviderConfig::MaximumRetryBaseDelayMs;
+        QVERIFY(config.validate());
+
+        QString errorMessage;
+        config.maxRetries = ModelProviderConfig::MaximumRetries + 1;
+        QVERIFY(!config.validate(&errorMessage));
+        QVERIFY(errorMessage.contains(QStringLiteral("retries 0..5")));
+    }
+
     void modelErrorsHaveFriendlyUserMessages()
     {
         QHash<QString, QString> messages;
@@ -340,31 +398,6 @@ private slots:
         QCOMPARE(decoded.size(), outputSize);
     }
 
-    void screenCaptureCanCaptureAndPersistCompressedImage()
-    {
-        QTemporaryDir directory;
-        QVERIFY(directory.isValid());
-        ScreenCapture capture;
-        ImageCompressionOptions options;
-        options.maxWidth = 640;
-        options.quality = 60;
-        capture.configure(false, 5000, directory.path(), options);
-        QSignalSpy capturedSpy(&capture, &ScreenCapture::captured);
-        QString error;
-        if (!capture.captureNow(&error)) {
-            QSKIP(qPrintable(QStringLiteral("screen capture unavailable in test environment: %1")
-                                 .arg(error)));
-        }
-        QCOMPARE(capturedSpy.count(), 1);
-        const CapturedImage image = qvariant_cast<CapturedImage>(capturedSpy.at(0).at(0));
-        QVERIFY(!image.data.isEmpty());
-        QVERIFY(!image.filePath.isEmpty());
-        QVERIFY(QFileInfo::exists(image.filePath));
-        QVERIFY(image.size.width() <= 640);
-        QVERIFY(capture.clearCaptures(&error));
-        QVERIFY(!QFileInfo::exists(image.filePath));
-    }
-
     void applicationConfigPersistsAssetPaths()
     {
         QTemporaryDir directory;
@@ -418,7 +451,90 @@ private slots:
         QString errorMessage;
         QVERIFY2(database.open(databasePath, &errorMessage), qPrintable(errorMessage));
         QVERIFY(database.isOpen());
-        QCOMPARE(database.schemaVersion(), 3);
+        QCOMPARE(database.schemaVersion(), 4);
+    }
+
+    void databaseMigratesVersionThreeMemorySourcesToObservationForeignKey()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("schema-v3.sqlite"));
+        const QString connectionName = QStringLiteral("schema_v3_%1")
+            .arg(QUuid::createUuid().toString(QUuid::Id128));
+        {
+            QSqlDatabase legacy = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+            legacy.setDatabaseName(path);
+            QVERIFY(legacy.open());
+            QSqlQuery query(legacy);
+            QVERIFY(query.exec(QStringLiteral("CREATE TABLE schema_version(version INTEGER NOT NULL)")));
+            QVERIFY(query.exec(QStringLiteral("INSERT INTO schema_version VALUES(3)")));
+            QVERIFY(query.exec(QStringLiteral(
+                "CREATE TABLE conversations(id TEXT PRIMARY KEY,title TEXT NOT NULL,"
+                "created_at TEXT NOT NULL,updated_at TEXT NOT NULL,archived_at TEXT)")));
+            QVERIFY(query.exec(QStringLiteral(
+                "CREATE TABLE conversation_messages(id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "conversation_id TEXT NOT NULL,role TEXT NOT NULL,content TEXT NOT NULL,"
+                "token_count INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL,summarized_at TEXT)")));
+            QVERIFY(query.exec(QStringLiteral(
+                "CREATE TABLE memories(id INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT NOT NULL,"
+                "content TEXT NOT NULL,source_event_id TEXT,created_at TEXT NOT NULL,expires_at TEXT)")));
+            QVERIFY(query.exec(QStringLiteral(
+                "CREATE TABLE database_capabilities(name TEXT PRIMARY KEY,enabled INTEGER NOT NULL,detail TEXT)")));
+            QVERIFY(query.exec(QStringLiteral(
+                "INSERT INTO conversations VALUES('legacy-chat','旧会话',"
+                "'2026-01-01T00:00:00.000Z','2026-01-01T00:00:03.000Z',NULL)")));
+            QVERIFY(query.exec(QStringLiteral(
+                "INSERT INTO conversation_messages(conversation_id,role,content,created_at) VALUES"
+                "('legacy-chat','user','用户发起了一次截图分析','2026-01-01T00:00:00.000Z'),"
+                "('legacy-chat','assistant','旧屏幕观察摘要','2026-01-01T00:00:01.000Z'),"
+                "('legacy-chat','user','保留的普通消息','2026-01-01T00:00:02.000Z')")));
+            QVERIFY(query.exec(QStringLiteral(
+                "INSERT INTO memories(kind,content,source_event_id,created_at) "
+                "VALUES('long_term','保留的旧记忆','legacy-orphan','2026-01-01T00:00:00.000Z')")));
+            query.finish();
+            legacy.close();
+        }
+        QSqlDatabase::removeDatabase(connectionName);
+
+        Database database;
+        QString error;
+        QVERIFY2(database.open(path, &error), qPrintable(error));
+        QCOMPARE(database.schemaVersion(), 4);
+        QSqlQuery memory(database.connection());
+        QVERIFY(memory.exec(QStringLiteral(
+            "SELECT content,source_event_id FROM memories ORDER BY id LIMIT 1")));
+        QVERIFY(memory.next());
+        QCOMPARE(memory.value(0).toString(), QStringLiteral("保留的旧记忆"));
+        QVERIFY(memory.value(1).isNull());
+        memory.finish();
+        QSqlQuery messages(database.connection());
+        QVERIFY(messages.exec(QStringLiteral(
+            "SELECT role,content FROM conversation_messages ORDER BY id")));
+        QVERIFY(messages.next());
+        QCOMPARE(messages.value(0).toString(), QStringLiteral("user"));
+        QCOMPARE(messages.value(1).toString(), QStringLiteral("保留的普通消息"));
+        QVERIFY(!messages.next());
+        QSqlQuery observation(database.connection());
+        QVERIFY(observation.exec(QStringLiteral(
+            "SELECT summary FROM observation_events WHERE id='legacy-1'")));
+        QVERIFY(observation.next());
+        QCOMPARE(observation.value(0).toString(), QStringLiteral("旧屏幕观察摘要"));
+
+        bool sourceForeignKeyFound = false;
+        QSqlQuery foreignKeys(database.connection());
+        QVERIFY(foreignKeys.exec(QStringLiteral("PRAGMA foreign_key_list(memories)")));
+        while (foreignKeys.next()) {
+            if (foreignKeys.value(2).toString() == QStringLiteral("observation_events")
+                && foreignKeys.value(3).toString() == QStringLiteral("source_event_id")
+                && foreignKeys.value(4).toString() == QStringLiteral("id")
+                && foreignKeys.value(6).toString() == QStringLiteral("SET NULL")) {
+                sourceForeignKeyFound = true;
+            }
+        }
+        QVERIFY(sourceForeignKeyFound);
+        QSqlQuery check(database.connection());
+        QVERIFY(check.exec(QStringLiteral("PRAGMA foreign_key_check")));
+        QVERIFY(!check.next());
     }
 
     void databaseResultsDistinguishNotFoundFromFailure()
@@ -721,6 +837,14 @@ private slots:
         QVERIFY(overlay.testAttribute(Qt::WA_TranslucentBackground));
         QVERIFY(overlay.testAttribute(Qt::WA_ShowWithoutActivating));
         QVERIFY(overlay.testAttribute(Qt::WA_TransparentForMouseEvents));
+#ifdef Q_OS_WIN
+        if (QGuiApplication::platformName() == QStringLiteral("windows")) {
+            DWORD affinity = WDA_NONE;
+            QVERIFY(GetWindowDisplayAffinity(
+                reinterpret_cast<HWND>(overlay.winId()), &affinity));
+            QVERIFY(affinity == WDA_EXCLUDEFROMCAPTURE || affinity == WDA_MONITOR);
+        }
+#endif
         QVERIFY(DesktopWindowPolicy::setMouseInputTransparent(&overlay, false, &error));
         QVERIFY(!overlay.testAttribute(Qt::WA_TransparentForMouseEvents));
     }
@@ -961,6 +1085,12 @@ private slots:
         SettingsDialog settings(nullptr);
         QVERIFY(!settings.testAttribute(Qt::WA_TranslucentBackground));
         QVERIFY(settings.styleSheet().contains(QStringLiteral("#fffaf0")));
+        auto* capturePrivacyHelp = settings.findChild<QPushButton*>(
+            QStringLiteral("settingsCapturePrivacyHelp"));
+        QVERIFY(capturePrivacyHelp != nullptr);
+        QCOMPARE(capturePrivacyHelp->text(), QStringLiteral("?"));
+        QCOMPARE(capturePrivacyHelp->accessibleName(),
+                 QStringLiteral("查看屏幕截图隐私提醒"));
     }
 
     void mainWindowRunsStreamingChatAndShowsReplyBubble()
@@ -996,6 +1126,215 @@ private slots:
         QVERIFY(bubbleContent != nullptr);
         QTest::mouseClick(bubbleContent->viewport(), Qt::LeftButton);
         QVERIFY(!window.conversationWindow()->isVisible());
+    }
+
+    void mainWindowSendsCapturedImageAndDeletesItAfterReply()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        Database database;
+        QVERIFY(database.open(temporaryDirectory.filePath(QStringLiteral("vision-ui.sqlite"))));
+        SqliteConversationRepository conversations(&database);
+        const QString conversationId = conversations.createConversation(QStringLiteral("截图界面"));
+        SqliteObservationRepository observations(&database);
+        MemoryOrchestrator memory(&conversations, nullptr, &observations);
+        MockChatProvider provider(QStringLiteral("我看到了当前屏幕"));
+        ChatController controller(&provider, &memory);
+        QVERIFY(controller.setPersonaConfig(testPersona()));
+        MainWindow window;
+        window.setCaptureDirectory(temporaryDirectory.path());
+        window.setChatController(&controller);
+        window.setConversation(conversationId, {});
+        ScreenCapture* capture = window.findChild<ScreenCapture*>();
+        QVERIFY(capture != nullptr);
+        ImageCompressionOptions compression;
+        capture->configure(true, 5000, temporaryDirectory.path(), compression);
+        auto* observation = window.findChild<ScreenObservationCoordinator*>();
+        QVERIFY(observation != nullptr);
+        UiConfig captureConfig;
+        captureConfig.screenCaptureEnabled = true;
+        captureConfig.automaticScreenAnalysisEnabled = true;
+        observation->applyConfiguration(captureConfig);
+
+        const QString screenshotPath = temporaryDirectory.filePath(
+            QStringLiteral("capture_test.jpeg"));
+        QFile screenshot(screenshotPath);
+        QVERIFY(screenshot.open(QIODevice::WriteOnly));
+        QVERIFY(screenshot.write("compressed-image") > 0);
+        screenshot.close();
+        CapturedImage image;
+        image.data = QByteArrayLiteral("compressed-image");
+        image.fingerprint = QByteArrayLiteral("ui-fingerprint");
+        image.capturedAt = QDateTime::currentDateTimeUtc();
+        image.format = QStringLiteral("jpeg");
+        image.filePath = screenshotPath;
+        image.trigger = CaptureTrigger::Scheduled;
+        emit capture->captured(image);
+
+        QTRY_COMPARE_WITH_TIMEOUT(provider.requestCount(), 1, 1000);
+        QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(screenshotPath), 1000);
+        const QVector<ConversationMessage> history = conversations.recentMessages(conversationId, 10);
+        QVERIFY(history.isEmpty());
+        const auto latest = observations.latestValidResult(
+            conversationId, image.capturedAt.addSecs(1));
+        QVERIFY(latest);
+        QVERIFY(latest.value().has_value());
+        QCOMPARE(latest.value()->summary, QStringLiteral("我看到了当前屏幕"));
+        QVERIFY(provider.lastMessages().back().hasImage());
+        QVERIFY(!provider.lastOptions().stream);
+        QVERIFY(provider.lastOptions().disableThinking);
+    }
+
+    void mainWindowSkipsUnchangedScreenshotAndAdvancesFingerprintBeforeFailure()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        Database database;
+        QVERIFY(database.open(temporaryDirectory.filePath(QStringLiteral("vision-dedup.sqlite"))));
+        SqliteConversationRepository conversations(&database);
+        const QString conversationId = conversations.createConversation(QStringLiteral("截图去重"));
+        SqliteObservationRepository observations(&database);
+        MemoryOrchestrator memory(&conversations, nullptr, &observations);
+        ControllableChatProvider provider;
+        ChatController controller(&provider, &memory);
+        QVERIFY(controller.setPersonaConfig(testPersona()));
+        MainWindow window;
+        window.setCaptureDirectory(temporaryDirectory.path());
+        window.setChatController(&controller);
+        window.setConversation(conversationId, {});
+        ScreenCapture* capture = window.findChild<ScreenCapture*>();
+        QVERIFY(capture != nullptr);
+        ImageCompressionOptions compression;
+        capture->configure(true, 5000, temporaryDirectory.path(), compression);
+        auto* observation = window.findChild<ScreenObservationCoordinator*>();
+        QVERIFY(observation != nullptr);
+        UiConfig captureConfig;
+        captureConfig.screenCaptureEnabled = true;
+        captureConfig.automaticScreenAnalysisEnabled = true;
+        observation->applyConfiguration(captureConfig);
+
+        constexpr int fingerprintBytes =
+            (ScreenFingerprint::Width * ScreenFingerprint::Height + 7) / 8;
+        const QByteArray baseline(fingerprintBytes, '\0');
+        const auto makeCapture = [&](const QString& name, const QByteArray& fingerprint) {
+            CapturedImage image;
+            image.data = QByteArrayLiteral("compressed-image");
+            image.fingerprint = fingerprint;
+            image.capturedAt = QDateTime::currentDateTimeUtc();
+            image.format = QStringLiteral("jpeg");
+            image.filePath = temporaryDirectory.filePath(name);
+            image.trigger = CaptureTrigger::Scheduled;
+            QFile file(image.filePath);
+            if (!file.open(QIODevice::WriteOnly) || file.write(image.data) != image.data.size()) {
+                image.filePath.clear();
+            }
+            return image;
+        };
+
+        const CapturedImage first = makeCapture(QStringLiteral("capture_dedup_first.jpeg"), baseline);
+        QVERIFY(!first.filePath.isEmpty());
+        emit capture->captured(first);
+        QCOMPARE(provider.requestCount(), 1);
+        provider.finish(ChatResult::success(QStringLiteral("首次分析")));
+        QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(first.filePath), 1000);
+
+        const CapturedImage unchanged = makeCapture(
+            QStringLiteral("capture_dedup_unchanged.jpeg"), baseline);
+        QVERIFY(!unchanged.filePath.isEmpty());
+        emit capture->captured(unchanged);
+        QCOMPARE(provider.requestCount(), 1);
+        QVERIFY(!QFileInfo::exists(unchanged.filePath));
+        QVERIFY(conversations.recentMessages(conversationId, 10).isEmpty());
+
+        QByteArray changed = baseline;
+        for (int bit = 0; bit < 70; ++bit) {
+            changed[bit / 8] = static_cast<char>(
+                static_cast<unsigned char>(changed.at(bit / 8))
+                | static_cast<unsigned char>(1U << (bit % 8)));
+        }
+        const CapturedImage failed = makeCapture(
+            QStringLiteral("capture_dedup_failed.jpeg"), changed);
+        emit capture->captured(failed);
+        QCOMPARE(provider.requestCount(), 2);
+        provider.finish(ChatResult::failure(
+            {ModelErrorCode::Network, QStringLiteral("network failure"), 0}));
+        QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(failed.filePath), 1000);
+
+        const CapturedImage sameAfterFailure = makeCapture(
+            QStringLiteral("capture_dedup_after_failure.jpeg"), changed);
+        emit capture->captured(sameAfterFailure);
+        QCOMPARE(provider.requestCount(), 2);
+        QVERIFY(!QFileInfo::exists(sameAfterFailure.filePath));
+    }
+
+    void mainWindowBlocksConcurrentScreenshotRequestsAndCleansFailures()
+    {
+        QTemporaryDir temporaryDirectory;
+        Database database;
+        QVERIFY(database.open(temporaryDirectory.filePath(QStringLiteral("vision-block.sqlite"))));
+        SqliteConversationRepository conversations(&database);
+        const QString conversationId = conversations.createConversation(QStringLiteral("截图阻断"));
+        SqliteObservationRepository observations(&database);
+        MemoryOrchestrator memory(&conversations, nullptr, &observations);
+        ControllableChatProvider provider;
+        ChatController controller(&provider, &memory);
+        QVERIFY(controller.setPersonaConfig(testPersona()));
+        MainWindow window;
+        window.setCaptureDirectory(temporaryDirectory.path());
+        window.setChatController(&controller);
+        window.setConversation(conversationId, {});
+        ScreenCapture* capture = window.findChild<ScreenCapture*>();
+        QVERIFY(capture != nullptr);
+        ImageCompressionOptions compression;
+        capture->configure(true, 5000, temporaryDirectory.path(), compression);
+        auto* observation = window.findChild<ScreenObservationCoordinator*>();
+        QVERIFY(observation != nullptr);
+        UiConfig captureConfig;
+        captureConfig.screenCaptureEnabled = true;
+        captureConfig.automaticScreenAnalysisEnabled = true;
+        observation->applyConfiguration(captureConfig);
+        const auto makeCapture = [&](const QString& name) {
+            CapturedImage image;
+            image.data = QByteArrayLiteral("compressed-image");
+            image.fingerprint = QByteArrayLiteral("blocking-fingerprint-") + name.toUtf8();
+            image.capturedAt = QDateTime::currentDateTimeUtc();
+            image.format = QStringLiteral("jpeg");
+            image.filePath = temporaryDirectory.filePath(name);
+            image.trigger = CaptureTrigger::Scheduled;
+            QFile file(image.filePath);
+            if (!file.open(QIODevice::WriteOnly) || file.write(image.data) != image.data.size()) {
+                image.filePath.clear();
+            }
+            return image;
+        };
+
+        const CapturedImage first = makeCapture(QStringLiteral("capture_first.jpeg"));
+        QVERIFY(!first.filePath.isEmpty());
+        emit capture->captured(first);
+        QCOMPARE(provider.requestCount(), 1);
+        QVERIFY(QFileInfo::exists(first.filePath));
+
+        const CapturedImage blocked = makeCapture(QStringLiteral("capture_blocked.jpeg"));
+        QVERIFY(!blocked.filePath.isEmpty());
+        emit capture->captured(blocked);
+        QCOMPARE(provider.requestCount(), 1);
+        QVERIFY(!QFileInfo::exists(blocked.filePath));
+
+        provider.finish(ChatResult::success(QStringLiteral("第一次分析完成")));
+        QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(first.filePath), 1000);
+
+        const CapturedImage failed = makeCapture(QStringLiteral("capture_failed.jpeg"));
+        QVERIFY(!failed.filePath.isEmpty());
+        emit capture->captured(failed);
+        QCOMPARE(provider.requestCount(), 2);
+        AppError failure;
+        failure.code = AppErrorCode::Network;
+        failure.message = QStringLiteral("network failure");
+        failure.retryable = true;
+        provider.finish(ChatResult::failure(failure));
+        QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(failed.filePath), 1000);
+        QTRY_COMPARE_WITH_TIMEOUT(controller.pendingRequestCount(), 0, 1000);
+        QVERIFY(controller.retryLast().isEmpty());
     }
 
     void conversationHistoryKeepsTransientMessagesWhileHidden()
@@ -1151,6 +1490,46 @@ private slots:
             QCOMPARE(controller.currentConversationId(), selectedId);
             QCOMPARE(controller.currentConversationTitle(), QStringLiteral("要恢复的会话"));
         }
+    }
+
+    void conversationControllerLoadsOlderMessagesInTwoHundredMessagePages()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        Database database;
+        QVERIFY(database.open(directory.filePath(QStringLiteral("paged-chat.sqlite"))));
+        SqliteConversationRepository repository(&database);
+        const QString id = repository.createConversation(QStringLiteral("长会话"));
+        for (int index = 0; index < 450; ++index) {
+            QVERIFY(repository.appendMessage(id, Message::create(
+                index % 2 == 0 ? MessageRole::User : MessageRole::Assistant,
+                QStringLiteral("message-%1").arg(index, 3, 10, QLatin1Char('0')))));
+        }
+        ConversationController controller(&repository);
+        QVERIFY(controller.switchConversation(id));
+        QCOMPARE(controller.currentConversationMessages().size(), 200);
+        QCOMPARE(controller.currentConversationMessages().front().message.content,
+                 QStringLiteral("message-250"));
+        QVERIFY(controller.hasOlderMessages());
+        QSignalSpy loadedSpy(&controller, &ConversationController::olderMessagesLoaded);
+
+        QVERIFY(controller.loadOlderMessages());
+        QCOMPARE(controller.currentConversationMessages().size(), 400);
+        QCOMPARE(controller.currentConversationMessages().front().message.content,
+                 QStringLiteral("message-050"));
+        QVERIFY(controller.hasOlderMessages());
+        QCOMPARE(loadedSpy.count(), 1);
+        QCOMPARE(loadedSpy.at(0).at(2).toInt(), 200);
+
+        QVERIFY(controller.loadOlderMessages());
+        QCOMPARE(controller.currentConversationMessages().size(), 450);
+        QCOMPARE(controller.currentConversationMessages().front().message.content,
+                 QStringLiteral("message-000"));
+        QVERIFY(!controller.hasOlderMessages());
+        QCOMPARE(loadedSpy.count(), 2);
+        QCOMPARE(loadedSpy.at(1).at(2).toInt(), 50);
+        QVERIFY(controller.loadOlderMessages());
+        QCOMPARE(loadedSpy.count(), 2);
     }
 
     void conversationControllerDeletesConversationAndMessages()

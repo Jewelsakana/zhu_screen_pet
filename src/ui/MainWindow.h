@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QByteArray>
 #include <QHash>
 #include <QMainWindow>
 #include <QPoint>
@@ -32,6 +33,8 @@ class HoverRevealController;
 class ReplyBubbleWindow;
 class SettingsController;
 class ScreenCapture;
+class ScreenObservationCoordinator;
+struct CapturedImage;
 class WindowAttachmentManager;
 
 /** 透明桌宠主窗口，负责协调附属 UI；聊天、会话和设置业务仍由应用控制器处理。 */
@@ -85,6 +88,7 @@ private:
     void onReplyDelta(const QString& requestId, const QString& delta);
     void onReplyFinished(const QString& requestId, const QString& content);
     void onRequestFailed(const QString& requestId, const ModelError& error);
+    void onScreenCaptured(const CapturedImage& image);
     void onOperationFailed(const AppError& error);
     void onErrorReported(const AppError& error, const QString& userMessage);
     void onCurrentConversationChanged(const QString& conversationId,
@@ -101,8 +105,8 @@ private:
     ModelErrorPresenter errorPresenter_;
     QString conversationId_;
     QString currentRequestId_;
-    QString lastAssistantReply_;
     bool streamingReplyStarted_ = false;
+    bool currentRequestIsScreenshot_ = false;
     bool dragging_ = false;
     QPoint dragOffset_;
     UiConfig uiConfig_;
@@ -120,8 +124,7 @@ private:
     HoverRevealController* inputReveal_ = nullptr;
     WindowAttachmentManager* attachments_ = nullptr;
     bool repositioningConversationChain_ = false;
-    ScreenCapture* screenCapture_ = nullptr;
-    QString captureDirectory_;
+    ScreenObservationCoordinator* screenObservation_ = nullptr;
 };
 
 } // namespace zhu_screen_pet

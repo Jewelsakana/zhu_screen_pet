@@ -22,6 +22,7 @@
 #include "memory/MemoryOrchestrator.h"
 #include "memory/SqliteConversationRepository.h"
 #include "memory/SqliteMemoryRepository.h"
+#include "memory/SqliteObservationRepository.h"
 #include "model/ChatProviderFactory.h"
 #include "model/ProviderManager.h"
 #include "ui/MainWindow.h"
@@ -94,7 +95,9 @@ bool ApplicationBootstrapper::initialize(AppError* error)
 
     conversations_ = std::make_unique<SqliteConversationRepository>(database_.get());
     memories_ = std::make_unique<SqliteMemoryRepository>(database_.get());
-    memoryOrchestrator_ = std::make_unique<MemoryOrchestrator>(conversations_.get(), memories_.get());
+    observations_ = std::make_unique<SqliteObservationRepository>(database_.get());
+    memoryOrchestrator_ = std::make_unique<MemoryOrchestrator>(
+        conversations_.get(), memories_.get(), observations_.get());
     httpClient_ = std::make_unique<HttpClient>();
     secretStore_ = std::make_unique<SecretStore>();
 

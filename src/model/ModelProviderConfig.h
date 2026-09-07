@@ -8,6 +8,13 @@ namespace zhu_screen_pet {
 /** 创建一个聊天模型 Provider 所需的公开配置；不保存 API Key 明文。 */
 struct ModelProviderConfig
 {
+    static constexpr int MinimumTimeoutMs = 100;
+    static constexpr int MaximumTimeoutMs = 600000;
+    static constexpr int MinimumRetries = 0;
+    static constexpr int MaximumRetries = 5;
+    static constexpr int MinimumRetryBaseDelayMs = 50;
+    static constexpr int MaximumRetryBaseDelayMs = 30000;
+
     QString profileId;
     QString providerType;
     QString displayName;

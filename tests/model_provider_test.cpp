@@ -168,6 +168,129 @@ private slots:
         QVERIFY(receivedRequest.contains("\"content\":\"hello\""));
     }
 
+    void openAiCompatibleProviderEncodesImageAttachment()
+    {
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost));
+        QByteArray receivedRequest;
+        connect(&server, &QTcpServer::newConnection, this, [&]() {
+            QTcpSocket* socket = server.nextPendingConnection();
+            connect(socket, &QTcpSocket::readyRead, socket, [&, socket]() {
+                receivedRequest += socket->readAll();
+                if (!receivedRequest.contains("\r\n\r\n")) return;
+                const QByteArray body = QByteArrayLiteral(
+                    "{\"choices\":[{\"message\":{\"content\":\"image ok\"}}]}");
+                socket->write(QByteArrayLiteral(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ")
+                    + QByteArray::number(body.size())
+                    + QByteArrayLiteral("\r\nConnection: close\r\n\r\n") + body);
+                socket->flush();
+                QTimer::singleShot(20, socket, &QTcpSocket::disconnectFromHost);
+            });
+        });
+
+        HttpClient httpClient;
+        ProviderConfig config;
+        config.baseUrl = QStringLiteral("http://127.0.0.1:%1").arg(server.serverPort());
+        config.model = QStringLiteral("vision-model");
+        config.apiKey = QStringLiteral("test-key");
+        DeepSeekAICompatibleProvider provider(config, &httpClient);
+        QSignalSpy spy(&provider, &ChatProvider::chatFinished);
+        MessageImage image;
+        image.data = QByteArrayLiteral("abc");
+        image.mimeType = QStringLiteral("image/jpeg");
+        image.detail = QStringLiteral("original");
+        ChatOptions options;
+        options.disableThinking = true;
+        provider.startChat({Message::createWithImage(MessageRole::User,
+                                                      QStringLiteral("describe"), image)},
+                           options);
+        QVERIFY(spy.wait(3000));
+        QVERIFY(resultFromSpy(spy).succeeded);
+        QVERIFY(receivedRequest.contains("\"type\":\"image_url\""));
+        QVERIFY(receivedRequest.contains("data:image/jpeg;base64,YWJj"));
+        QVERIFY(receivedRequest.contains("\"detail\":\"original\""));
+        QVERIFY(receivedRequest.contains("\"thinking\":{\"type\":\"disabled\"}"));
+    }
+
+    void openAiCompatibleProviderParsesContentBlockArray()
+    {
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost));
+        connect(&server, &QTcpServer::newConnection, this, [&]() {
+            QTcpSocket* socket = server.nextPendingConnection();
+            connect(socket, &QTcpSocket::readyRead, socket, [socket, responded = false]() mutable {
+                if (responded) return;
+                responded = true;
+                socket->readAll();
+                const QByteArray body = QByteArrayLiteral(
+                    "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":["
+                    "{\"type\":\"text\",\"text\":\"first\"},"
+                    "{\"type\":\"output_text\",\"text\":\"second\"}]}}]}");
+                socket->write(QByteArrayLiteral(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ")
+                    + QByteArray::number(body.size())
+                    + QByteArrayLiteral("\r\nConnection: close\r\n\r\n") + body);
+                socket->flush();
+                QTimer::singleShot(20, socket, &QTcpSocket::disconnectFromHost);
+            });
+        });
+
+        HttpClient httpClient;
+        ProviderConfig config;
+        config.baseUrl = QStringLiteral("http://127.0.0.1:%1").arg(server.serverPort());
+        config.model = QStringLiteral("vision-model");
+        config.apiKey = QStringLiteral("test-key");
+        OpenAICompatibleProvider provider(config, &httpClient);
+        QSignalSpy finishSpy(&provider, &ChatProvider::chatFinished);
+        provider.startChat({Message::create(MessageRole::User, QStringLiteral("hello"))},
+                           ChatOptions{});
+        QVERIFY(finishSpy.wait(3000));
+        const ChatResult result = resultFromSpy(finishSpy);
+        QVERIFY(result.succeeded);
+        QCOMPARE(result.content, QStringLiteral("first\nsecond"));
+    }
+
+    void openAiCompatibleProviderExplainsReasoningBudgetExhaustion()
+    {
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost));
+        connect(&server, &QTcpServer::newConnection, this, [&]() {
+            QTcpSocket* socket = server.nextPendingConnection();
+            connect(socket, &QTcpSocket::readyRead, socket, [socket, responded = false]() mutable {
+                if (responded) return;
+                responded = true;
+                socket->readAll();
+                const QByteArray body = QByteArrayLiteral(
+                    "{\"choices\":[{\"finish_reason\":\"length\",\"message\":{"
+                    "\"content\":\"\",\"reasoning_content\":\"internal reasoning\"}}]}");
+                socket->write(QByteArrayLiteral(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ")
+                    + QByteArray::number(body.size())
+                    + QByteArrayLiteral("\r\nConnection: close\r\n\r\n") + body);
+                socket->flush();
+                QTimer::singleShot(20, socket, &QTcpSocket::disconnectFromHost);
+            });
+        });
+
+        HttpClient httpClient;
+        ProviderConfig config;
+        config.baseUrl = QStringLiteral("http://127.0.0.1:%1").arg(server.serverPort());
+        config.model = QStringLiteral("vision-model");
+        config.apiKey = QStringLiteral("test-key");
+        OpenAICompatibleProvider provider(config, &httpClient);
+        QSignalSpy finishSpy(&provider, &ChatProvider::chatFinished);
+        provider.startChat({Message::create(MessageRole::User, QStringLiteral("hello"))},
+                           ChatOptions{});
+        QVERIFY(finishSpy.wait(3000));
+        const ChatResult result = resultFromSpy(finishSpy);
+        QVERIFY(!result.succeeded);
+        QCOMPARE(result.error.code, ModelErrorCode::InvalidResponse);
+        QVERIFY(result.error.technicalMessage.contains(QStringLiteral("token budget")));
+        QVERIFY(result.error.technicalMessage.contains(QStringLiteral("finish_reason=length")));
+        QVERIFY(!result.error.technicalMessage.contains(QStringLiteral("internal reasoning")));
+    }
+
     void openAiCompatibleProviderClassifiesHttpErrorsBeforeTransportErrors()
     {
         struct HttpErrorCase
@@ -237,6 +360,89 @@ private slots:
             QCOMPARE(provider.lastAttemptCount(), testCase.expectedAttempts);
             QCOMPARE(connectionCount, testCase.expectedAttempts);
         }
+    }
+
+    void screenshotRequestDoesNotRetryTransportFailure()
+    {
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost));
+        int connectionCount = 0;
+        connect(&server, &QTcpServer::newConnection, this, [&]() {
+            while (server.hasPendingConnections()) {
+                QTcpSocket* socket = server.nextPendingConnection();
+                ++connectionCount;
+                connect(socket, &QTcpSocket::readyRead, socket, [socket]() {
+                    socket->readAll();
+                    const QByteArray body = QByteArrayLiteral(
+                        "{\"error\":{\"message\":\"temporary failure\"}}");
+                    socket->write(QByteArrayLiteral(
+                        "HTTP/1.1 500 Error\r\nContent-Type: application/json\r\nContent-Length: ")
+                        + QByteArray::number(body.size())
+                        + QByteArrayLiteral("\r\nConnection: close\r\n\r\n") + body);
+                    socket->flush();
+                    QTimer::singleShot(20, socket, &QTcpSocket::disconnectFromHost);
+                });
+            }
+        });
+
+        HttpClient httpClient;
+        ProviderConfig config;
+        config.baseUrl = QStringLiteral("http://127.0.0.1:%1").arg(server.serverPort());
+        config.model = QStringLiteral("vision-model");
+        config.apiKey = QStringLiteral("test-key");
+        config.maxRetries = 3;
+        config.retryBaseDelayMs = 1;
+        OpenAICompatibleProvider provider(config, &httpClient);
+        QSignalSpy finishSpy(&provider, &ChatProvider::chatFinished);
+        ChatOptions options;
+        options.requestKind = ChatRequestKind::Screenshot;
+        provider.startChat({Message::create(MessageRole::User, QStringLiteral("screen"))},
+                           options);
+        QVERIFY(finishSpy.wait(3000));
+        QVERIFY(!resultFromSpy(finishSpy).succeeded);
+        QCOMPARE(connectionCount, 1);
+        QCOMPARE(provider.lastAttemptCount(), 1);
+    }
+
+    void oversizedResponseIsRejectedWithoutRetry()
+    {
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost));
+        int connectionCount = 0;
+        connect(&server, &QTcpServer::newConnection, this, [&]() {
+            while (server.hasPendingConnections()) {
+                QTcpSocket* socket = server.nextPendingConnection();
+                ++connectionCount;
+                connect(socket, &QTcpSocket::readyRead, socket, [socket]() {
+                    socket->readAll();
+                    const QByteArray body(HttpClient::MaximumResponseBytes + 1, 'x');
+                    socket->write(QByteArrayLiteral(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ")
+                        + QByteArray::number(body.size())
+                        + QByteArrayLiteral("\r\nConnection: close\r\n\r\n"));
+                    socket->write(body);
+                });
+            }
+        });
+
+        HttpClient httpClient;
+        ProviderConfig config;
+        config.baseUrl = QStringLiteral("http://127.0.0.1:%1").arg(server.serverPort());
+        config.model = QStringLiteral("bounded-model");
+        config.apiKey = QStringLiteral("test-key");
+        config.maxRetries = 5;
+        config.retryBaseDelayMs = 1;
+        OpenAICompatibleProvider provider(config, &httpClient);
+        QSignalSpy finishSpy(&provider, &ChatProvider::chatFinished);
+        ChatOptions options;
+        options.stream = false;
+        provider.startChat({Message::create(MessageRole::User, QStringLiteral("large"))}, options);
+        QVERIFY(finishSpy.wait(10000));
+        const ChatResult result = resultFromSpy(finishSpy);
+        QVERIFY(!result.succeeded);
+        QCOMPARE(result.error.code, ModelErrorCode::InvalidResponse);
+        QCOMPARE(connectionCount, 1);
+        QCOMPARE(provider.lastAttemptCount(), 1);
     }
 
     void deepSeekProviderUsesDefaults()
@@ -363,6 +569,45 @@ private slots:
         const ChatResult result = resultFromSpy(finishSpy);
         QVERIFY(result.succeeded);
         QCOMPARE(result.content, QStringLiteral("hello world"));
+    }
+
+    void streamingRequestFallsBackToJsonResponse()
+    {
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost));
+        connect(&server, &QTcpServer::newConnection, this, [&]() {
+            QTcpSocket* socket = server.nextPendingConnection();
+            connect(socket, &QTcpSocket::readyRead, socket, [socket, responded = false]() mutable {
+                if (responded) return;
+                responded = true;
+                socket->readAll();
+                const QByteArray body = QByteArrayLiteral(
+                    "{\"choices\":[{\"message\":{\"content\":\"json fallback\"}}]}");
+                socket->write(QByteArrayLiteral(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ")
+                    + QByteArray::number(body.size())
+                    + QByteArrayLiteral("\r\nConnection: close\r\n\r\n") + body);
+                socket->flush();
+                QTimer::singleShot(20, socket, &QTcpSocket::disconnectFromHost);
+            });
+        });
+
+        HttpClient httpClient;
+        ProviderConfig config;
+        config.baseUrl = QStringLiteral("http://127.0.0.1:%1").arg(server.serverPort());
+        config.model = QStringLiteral("vision-model");
+        config.apiKey = QStringLiteral("test-key");
+        OpenAICompatibleProvider provider(config, &httpClient);
+        QSignalSpy finishSpy(&provider, &ChatProvider::chatFinished);
+        QSignalSpy deltaSpy(&provider, &ChatProvider::chatDelta);
+        ChatOptions options;
+        options.stream = true;
+        provider.startChat({Message::create(MessageRole::User, QStringLiteral("image"))}, options);
+        QVERIFY(finishSpy.wait(3000));
+        QCOMPARE(deltaSpy.count(), 0);
+        const ChatResult result = resultFromSpy(finishSpy);
+        QVERIFY(result.succeeded);
+        QCOMPARE(result.content, QStringLiteral("json fallback"));
     }
 
     void streamingFailureAfterDeltaIsNotRetriedOrDuplicated()

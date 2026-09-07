@@ -7,8 +7,9 @@
 namespace zhu_screen_pet {
 
 MemoryOrchestrator::MemoryOrchestrator(ConversationRepository* conversations,
-                                       MemoryRepository* memories)
-    : conversations_(conversations), memories_(memories)
+                                       MemoryRepository* memories,
+                                       ObservationRepository* observations)
+    : conversations_(conversations), memories_(memories), observations_(observations)
 {
 }
 
@@ -88,6 +89,44 @@ MemoryContext MemoryOrchestrator::buildContext(const ContextRequest& request,
         usedTokens += tokens;
     }
 
+    Message latestObservationMessage;
+    bool hasLatestObservation = false;
+    if (request.includeLatestObservation && observations_ != nullptr) {
+        const auto observationResult = observations_->latestValidResult(
+            request.conversationId, QDateTime::currentDateTimeUtc());
+        if (!observationResult) {
+            if (errorMessage) {
+                *errorMessage = observationResult.error().technicalMessage.isEmpty()
+                    ? observationResult.error().message
+                    : observationResult.error().technicalMessage;
+            }
+            return {};
+        }
+        if (observationResult.value().has_value()) {
+            const ObservationEvent& observation = *observationResult.value();
+            const int observationLimit = qMax(1, request.latestObservationMaxTokens);
+            const QString prefix = QStringLiteral("[不可信屏幕观察][%1] ")
+                .arg(observation.capturedAt.toLocalTime().toString(Qt::ISODate));
+            const QString summary = observation.summary.trimmed();
+            int low = 0;
+            int high = summary.size();
+            while (low < high) {
+                const int middle = (low + high + 1) / 2;
+                if (estimateTokens(prefix + summary.left(middle)) <= observationLimit) low = middle;
+                else high = middle - 1;
+            }
+            const QString content = prefix + summary.left(low);
+            const int tokens = estimateTokens(content);
+            if (low > 0 && usedTokens + tokens <= maxTokens) {
+                latestObservationMessage = Message::create(MessageRole::User, content);
+                hasLatestObservation = true;
+                usedTokens += tokens;
+            } else {
+                context.truncated = true;
+            }
+        }
+    }
+
     const auto recentResult = conversations_->recentMessagesResult(request.conversationId, maxMessages);
     if (!recentResult) {
         if (errorMessage) *errorMessage = recentResult.error().technicalMessage.isEmpty()
@@ -96,18 +135,34 @@ MemoryContext MemoryOrchestrator::buildContext(const ContextRequest& request,
     }
     const QVector<ConversationMessage> recent = recentResult.value();
 
-    std::vector<Message> selectedRecentReversed;
-    selectedRecentReversed.reserve(static_cast<std::size_t>(recent.size()));
-    for (auto it = recent.crbegin(); it != recent.crend(); ++it) {
-        const int tokens = it->tokenCount > 0 ? it->tokenCount : estimateTokens(it->message.content);
-        if (usedTokens + tokens > maxTokens) {
-            context.truncated = true;
-            continue;
+    std::vector<Message> selectedRecent;
+    selectedRecent.reserve(static_cast<std::size_t>(recent.size()));
+    for (int end = recent.size() - 1; end >= 0;) {
+        int start = end;
+        if (recent.at(end).message.role == MessageRole::Assistant) {
+            if (end <= 0 || recent.at(end - 1).message.role != MessageRole::User) {
+                context.truncated = true;
+                break;
+            }
+            start = end - 1;
         }
-        selectedRecentReversed.push_back(it->message);
-        usedTokens += tokens;
+        int turnTokens = 0;
+        for (int index = start; index <= end; ++index) {
+            const ConversationMessage& item = recent.at(index);
+            turnTokens += item.tokenCount > 0
+                ? item.tokenCount : estimateTokens(item.message.content);
+        }
+        if (usedTokens + turnTokens > maxTokens) {
+            // 不跨过较新的完整轮次继续挑选旧消息，避免上下文出现孤立回复或时间断层。
+            context.truncated = true;
+            break;
+        }
+        for (int index = end; index >= start; --index) {
+            selectedRecent.insert(selectedRecent.begin(), recent.at(index).message);
+        }
+        usedTokens += turnTokens;
+        end = start - 1;
     }
-    std::reverse(selectedRecentReversed.begin(), selectedRecentReversed.end());
     context.truncated = context.truncated || recent.size() >= maxMessages;
 
     std::vector<Message> relatedMessages;
@@ -138,7 +193,7 @@ MemoryContext MemoryOrchestrator::buildContext(const ContextRequest& request,
             return content.simplified().toCaseFolded();
         };
         QSet<QString> seenContent;
-        for (const Message& message : selectedRecentReversed) {
+        for (const Message& message : selectedRecent) {
             seenContent.insert(canonical(message.content));
         }
         for (const ConversationMessage& item : related) {
@@ -175,10 +230,11 @@ MemoryContext MemoryOrchestrator::buildContext(const ContextRequest& request,
     }
 
     context.messages = request.leadingMessages;
-    context.messages.insert(context.messages.end(), selectedRecentReversed.begin(),
-                            selectedRecentReversed.end());
+    context.messages.insert(context.messages.end(), selectedRecent.begin(),
+                            selectedRecent.end());
     context.messages.insert(context.messages.end(), relatedMessages.begin(), relatedMessages.end());
     context.messages.insert(context.messages.end(), longTermMessages.begin(), longTermMessages.end());
+    if (hasLatestObservation) context.messages.push_back(latestObservationMessage);
     context.messages.push_back(current);
     context.estimatedTokens = usedTokens;
     return context;
@@ -190,6 +246,29 @@ bool MemoryOrchestrator::appendMessage(const QString& conversationId, const Mess
     if (conversations_ == nullptr || conversationId.isEmpty() || message.content.isEmpty()) return false;
     const auto result = conversations_->appendMessageResult(conversationId, message,
                                                              estimateTokens(message.content));
+    if (!result && errorMessage != nullptr) {
+        *errorMessage = result.error().technicalMessage.isEmpty()
+            ? result.error().message : result.error().technicalMessage;
+    }
+    return result.succeeded();
+}
+
+bool MemoryOrchestrator::appendObservation(const ObservationEvent& observation,
+                                           QString* errorMessage)
+{
+    if (observations_ == nullptr) {
+        if (errorMessage) *errorMessage = QStringLiteral("observation repository is not available");
+        return false;
+    }
+    const auto cleanup = observations_->removeExpiredResult(QDateTime::currentDateTimeUtc());
+    if (!cleanup) {
+        if (errorMessage) {
+            *errorMessage = cleanup.error().technicalMessage.isEmpty()
+                ? cleanup.error().message : cleanup.error().technicalMessage;
+        }
+        return false;
+    }
+    const auto result = observations_->saveResult(observation);
     if (!result && errorMessage != nullptr) {
         *errorMessage = result.error().technicalMessage.isEmpty()
             ? result.error().message : result.error().technicalMessage;
