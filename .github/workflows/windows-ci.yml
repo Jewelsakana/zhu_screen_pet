@@ -7,6 +7,7 @@ on:
 jobs:
   build-and-test:
     runs-on: windows-2022
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Install Qt 5.15.2
@@ -14,7 +15,6 @@ jobs:
         with:
           version: 5.15.2
           arch: win64_msvc2019_64
-          tools: tools_openssl_x64
           cache: true
       - name: Configure
         run: cmake -S . -B build -A x64 -DZHU_SCREEN_PET_BUILD_TESTS=ON
