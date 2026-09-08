@@ -3,6 +3,7 @@
 #include <QByteArray>
 #include <QHash>
 #include <QMainWindow>
+#include <QPixmap>
 #include <QPoint>
 #include <QVector>
 
@@ -16,6 +17,7 @@ class QLabel;
 class QCloseEvent;
 class QEvent;
 class QMouseEvent;
+class QResizeEvent;
 class QShowEvent;
 class QHideEvent;
 class QWidget;
@@ -75,12 +77,14 @@ protected:
     void mouseReleaseEvent(QMouseEvent* event) override;
     void showEvent(QShowEvent* event) override;
     void hideEvent(QHideEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
 private:
     void createOverlayWindows();
     QWidget* createHotZone(const QString& objectName, const QSize& size);
     void repositionConversationChain();
     void applyUiConfig(const UiConfig& config);
+    void updatePetAvatar();
     void sendCurrentMessage();
     void retryLastMessage();
     void cancelCurrentRequest();
@@ -110,6 +114,7 @@ private:
     bool dragging_ = false;
     QPoint dragOffset_;
     UiConfig uiConfig_;
+    QPixmap petAvatarPixmap_;
 
     QLabel* stateLabel_ = nullptr;
     QLabel* petVisual_ = nullptr;

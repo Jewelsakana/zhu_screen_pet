@@ -1,6 +1,7 @@
 #include "ui/ConversationWindow.h"
 
 #include <QDialog>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHideEvent>
 #include <QInputDialog>
@@ -9,11 +10,13 @@
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QScreen>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
 
 #include "app/ConversationController.h"
 #include "infrastructure/DesktopWindowPolicy.h"
+#include "infrastructure/WindowPlacement.h"
 #include "ui/ConversationHistoryWindow.h"
 
 namespace zhu_screen_pet {
@@ -25,8 +28,11 @@ ConversationWindow::ConversationWindow(QWidget* parent)
     setAttribute(Qt::WA_StyledBackground, true);
     setWindowTitle(QStringLiteral("会话列表"));
     DesktopWindowPolicy::apply(this, {true, true, false, true, true, false});
-    resize(380, 620);
-    setMinimumSize(320, 440);
+    const QRect available = QGuiApplication::primaryScreen()
+        ? QGuiApplication::primaryScreen()->availableGeometry()
+        : QRect(0, 0, 1920, 1080);
+    resize(WindowPlacement::scaleForScreen(QSize(320, 540), available));
+    setMinimumSize(WindowPlacement::scaleForScreen(QSize(270, 390), available));
     setStyleSheet(QStringLiteral(
         "QWidget#conversationWindow{background:#dcecff;border:1px solid #9bb9ea;border-radius:24px;}"
         "QLabel#conversationListTitle{color:#26375d;font-size:20px;font-weight:600;}"

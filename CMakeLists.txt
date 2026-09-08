@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.22)
 
 project(zhu_screen_pet VERSION 0.1.0 LANGUAGES CXX)
 
@@ -10,7 +10,7 @@ set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
 option(ZHU_SCREEN_PET_BUILD_TESTS "Build zhu_screen_pet smoke tests" ON)
-find_package(Qt5 5.15 REQUIRED COMPONENTS Core Gui Widgets Network Sql)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Widgets Network Sql)
 
 set(ZHU_SCREEN_PET_OPENSSL_RUNTIME_DIR "" CACHE PATH
     "Directory containing the OpenSSL runtime DLLs used by Qt")
@@ -34,7 +34,7 @@ endif()
 set(ZHU_SCREEN_PET_OPENSSL_RUNTIME_FILES "")
 if (WIN32)
     get_filename_component(ZHU_SCREEN_PET_QT_PREFIX
-        "${Qt5_DIR}/../../.." ABSOLUTE)
+        "${Qt6_DIR}/../../.." ABSOLUTE)
     get_filename_component(ZHU_SCREEN_PET_QT_ROOT
         "${ZHU_SCREEN_PET_QT_PREFIX}/../.." ABSOLUTE)
     file(GLOB ZHU_SCREEN_PET_OPENSSL_TOOL_DIRS LIST_DIRECTORIES true
@@ -47,9 +47,9 @@ if (WIN32)
         "${ZHU_SCREEN_PET_QT_PREFIX}/bin"
         ${ZHU_SCREEN_PET_OPENSSL_TOOL_DIRS})
     set(ZHU_SCREEN_PET_SSL_NAMES
-        "libssl-1_1-x64.dll" "libssl-1_1.dll" "ssleay32.dll")
+        "libssl-3-x64.dll" "libssl-3.dll" "libssl-1_1-x64.dll")
     set(ZHU_SCREEN_PET_CRYPTO_NAMES
-        "libcrypto-1_1-x64.dll" "libcrypto-1_1.dll" "libeay32.dll")
+        "libcrypto-3-x64.dll" "libcrypto-3.dll" "libcrypto-1_1-x64.dll")
     foreach(candidate_dir IN LISTS ZHU_SCREEN_PET_OPENSSL_SEARCH_DIRS)
         if (NOT candidate_dir OR ZHU_SCREEN_PET_OPENSSL_RUNTIME_FILES)
             continue()
@@ -90,6 +90,8 @@ file(GLOB_RECURSE ZHU_SCREEN_PET_UI_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/ui/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/src/ui/*.h")
 file(GLOB_RECURSE ZHU_SCREEN_PET_RESOURCE_FILES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/*.qrc")
+file(GLOB ZHU_SCREEN_PET_RUNTIME_IMAGE_FILES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/*.png")
 
 function(zhu_screen_pet_configure_target target)
     target_include_directories(${target} PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -117,33 +119,33 @@ endfunction()
 
 add_library(zhu_screen_pet_core STATIC ${ZHU_SCREEN_PET_CORE_SOURCES})
 zhu_screen_pet_configure_target(zhu_screen_pet_core)
-target_link_libraries(zhu_screen_pet_core PUBLIC Qt5::Core)
+target_link_libraries(zhu_screen_pet_core PUBLIC Qt6::Core)
 
 add_library(zhu_screen_pet_infrastructure STATIC ${ZHU_SCREEN_PET_INFRA_SOURCES})
 zhu_screen_pet_configure_target(zhu_screen_pet_infrastructure)
 target_link_libraries(zhu_screen_pet_infrastructure PUBLIC zhu_screen_pet_core
-    Qt5::Core Qt5::Gui Qt5::Widgets Qt5::Network Qt5::Sql)
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Sql)
 if (WIN32)
     target_link_libraries(zhu_screen_pet_infrastructure PUBLIC Advapi32 User32)
 endif()
 
 add_library(zhu_screen_pet_model STATIC ${ZHU_SCREEN_PET_MODEL_SOURCES})
 zhu_screen_pet_configure_target(zhu_screen_pet_model)
-target_link_libraries(zhu_screen_pet_model PUBLIC zhu_screen_pet_core zhu_screen_pet_infrastructure Qt5::Core Qt5::Network)
+target_link_libraries(zhu_screen_pet_model PUBLIC zhu_screen_pet_core zhu_screen_pet_infrastructure Qt6::Core Qt6::Network)
 
 add_library(zhu_screen_pet_memory STATIC ${ZHU_SCREEN_PET_MEMORY_SOURCES})
 zhu_screen_pet_configure_target(zhu_screen_pet_memory)
-target_link_libraries(zhu_screen_pet_memory PUBLIC zhu_screen_pet_core zhu_screen_pet_model zhu_screen_pet_infrastructure Qt5::Core Qt5::Sql)
+target_link_libraries(zhu_screen_pet_memory PUBLIC zhu_screen_pet_core zhu_screen_pet_model zhu_screen_pet_infrastructure Qt6::Core Qt6::Sql)
 
 add_library(zhu_screen_pet_app STATIC ${ZHU_SCREEN_PET_APP_SOURCES})
 zhu_screen_pet_configure_target(zhu_screen_pet_app)
 target_link_libraries(zhu_screen_pet_app PUBLIC zhu_screen_pet_core zhu_screen_pet_model zhu_screen_pet_memory
-    zhu_screen_pet_infrastructure Qt5::Core)
+    zhu_screen_pet_infrastructure Qt6::Core)
 
 add_library(zhu_screen_pet_ui STATIC ${ZHU_SCREEN_PET_UI_SOURCES})
 zhu_screen_pet_configure_target(zhu_screen_pet_ui)
 target_link_libraries(zhu_screen_pet_ui PUBLIC zhu_screen_pet_core zhu_screen_pet_app zhu_screen_pet_memory zhu_screen_pet_model
-    Qt5::Core Qt5::Gui Qt5::Widgets)
+    Qt6::Core Qt6::Gui Qt6::Widgets)
 
 add_executable(zhu_screen_pet WIN32
     "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp"
@@ -152,15 +154,22 @@ add_executable(zhu_screen_pet WIN32
     ${ZHU_SCREEN_PET_RESOURCE_FILES})
 zhu_screen_pet_configure_target(zhu_screen_pet)
 zhu_screen_pet_deploy_openssl(zhu_screen_pet)
+if (ZHU_SCREEN_PET_RUNTIME_IMAGE_FILES)
+    add_custom_command(TARGET zhu_screen_pet POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${ZHU_SCREEN_PET_RUNTIME_IMAGE_FILES} "$<TARGET_FILE_DIR:zhu_screen_pet>"
+        COMMENT "Deploying runtime image assets next to the executable"
+        VERBATIM)
+endif()
 target_link_libraries(zhu_screen_pet PRIVATE zhu_screen_pet_ui zhu_screen_pet_app zhu_screen_pet_memory zhu_screen_pet_model
-    zhu_screen_pet_infrastructure zhu_screen_pet_core Qt5::Widgets)
+    zhu_screen_pet_infrastructure zhu_screen_pet_core Qt6::Widgets)
 set_target_properties(zhu_screen_pet PROPERTIES VERSION ${PROJECT_VERSION} OUTPUT_NAME "小珠看着你")
 
 # 生成可复制到无 Qt 开发环境电脑上运行的 Windows 便携发布目录。
 # 该目标独立于普通编译，避免每次开发构建都执行 windeployqt。
 if (WIN32)
     get_filename_component(ZHU_SCREEN_PET_QT_BIN_DIR
-        "${Qt5_DIR}/../../../bin" ABSOLUTE)
+        "${Qt6_DIR}/../../../bin" ABSOLUTE)
     find_program(ZHU_SCREEN_PET_WINDEPLOYQT_EXECUTABLE
         NAMES windeployqt
         HINTS "${ZHU_SCREEN_PET_QT_BIN_DIR}"
@@ -212,14 +221,14 @@ endif()
 include(CTest)
 if (ZHU_SCREEN_PET_BUILD_TESTS)
     enable_testing()
-    find_package(Qt5 5.15 REQUIRED COMPONENTS Test)
-    get_filename_component(ZHU_SCREEN_PET_QT_PREFIX "${Qt5_DIR}/../../.." ABSOLUTE)
+    find_package(Qt6 6.8 REQUIRED COMPONENTS Test)
+    get_filename_component(ZHU_SCREEN_PET_QT_PREFIX "${Qt6_DIR}/../../.." ABSOLUTE)
     function(zhu_screen_pet_add_test target source)
         add_executable(${target} "${source}")
         zhu_screen_pet_configure_target(${target})
         zhu_screen_pet_deploy_openssl(${target})
         target_link_libraries(${target} PRIVATE zhu_screen_pet_ui zhu_screen_pet_app zhu_screen_pet_memory
-            zhu_screen_pet_model zhu_screen_pet_infrastructure zhu_screen_pet_core Qt5::Test Qt5::Widgets)
+            zhu_screen_pet_model zhu_screen_pet_infrastructure zhu_screen_pet_core Qt6::Test Qt6::Widgets)
         add_test(NAME ${target} COMMAND ${target})
         set_tests_properties(${target} PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${ZHU_SCREEN_PET_QT_PREFIX}/plugins")

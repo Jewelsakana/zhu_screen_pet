@@ -31,7 +31,7 @@ QString responseShape(const QJsonObject& root, const QJsonObject& choice,
 {
     const QJsonValue content = message.value(QStringLiteral("content"));
     const QJsonValue reasoning = message.value(QStringLiteral("reasoning_content"));
-    const auto valueLength = [](const QJsonValue& value) {
+    const auto valueLength = [](const QJsonValue& value) -> qsizetype {
         if (value.isString()) return value.toString().size();
         if (value.isArray()) return value.toArray().size();
         return 0;
@@ -413,7 +413,7 @@ bool OpenAICompatibleProvider::parseSseData(const QString& requestId,
         }
         const QJsonObject delta = choices.first().toObject()
             .value(QStringLiteral("delta")).toObject();
-        const QString content = delta.value(QStringLiteral("content")).toString();
+        const QString content = textFromContent(delta.value(QStringLiteral("content")));
         if (!content.isEmpty()) {
             request->streamedContent += content;
             request->deltaEmitted = true;

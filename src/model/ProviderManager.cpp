@@ -71,7 +71,7 @@ QString ProviderManager::activeProviderName() const
 
 int ProviderManager::activeRequestCount() const
 {
-    return activeRequests_.size();
+    return static_cast<int>(activeRequests_.size());
 }
 
 bool ProviderManager::hasProvider() const

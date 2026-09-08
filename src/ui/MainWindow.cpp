@@ -11,8 +11,10 @@
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QPixmap>
+#include <QResizeEvent>
 #include <QScreen>
 #include <QShowEvent>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -52,8 +54,11 @@ MainWindow::MainWindow(QWidget* parent)
     setWindowTitle(QStringLiteral("小珠看着你"));
     // 主窗口保留任务栏入口；只有附属气泡和悬浮面板使用 Tool 窗口。
     DesktopWindowPolicy::apply(this, {true, true, true, true, false, false});
-    resize(360, 420);
-    setMinimumSize(280, 320);
+    const QRect available = QGuiApplication::primaryScreen()
+        ? QGuiApplication::primaryScreen()->availableGeometry()
+        : QRect(0, 0, 1920, 1080);
+    resize(WindowPlacement::scaleForScreen(QSize(300, 350), available));
+    setMinimumSize(WindowPlacement::scaleForScreen(QSize(240, 280), available));
     auto* surface = new QWidget(this);
     surface->setObjectName(QStringLiteral("petSurface"));
     surface->setStyleSheet(QStringLiteral(
@@ -69,6 +74,8 @@ MainWindow::MainWindow(QWidget* parent)
     petFont.setPointSize(25);
     petFont.setBold(true);
     petVisual_->setFont(petFont);
+    // 断开图片尺寸对 QLabel 最小尺寸的约束，让头像可随窗口自由缩放。
+    petVisual_->setMinimumSize(1, 1);
     stateLabel_ = new QLabel(QStringLiteral("空闲"), surface);
     stateLabel_->setObjectName(QStringLiteral("stateLabel"));
     stateLabel_->setAlignment(Qt::AlignCenter);
@@ -284,12 +291,12 @@ void MainWindow::applyUiConfig(const UiConfig& config)
     actionReveal_->setTimings(uiConfig_.hoverHideDelayMs, uiConfig_.fadeDurationMs);
     inputReveal_->setTimings(uiConfig_.hoverHideDelayMs, uiConfig_.fadeDurationMs);
     const QString avatarPath = resolveConfiguredAssetPath(uiConfig_.petAvatarPath);
-    const QPixmap avatar(avatarPath);
-    if (!avatar.isNull()) {
-        petVisual_->setPixmap(avatar.scaled(280, 300, Qt::KeepAspectRatio,
-                                            Qt::SmoothTransformation));
+    petAvatarPixmap_ = QPixmap(avatarPath);
+    if (!petAvatarPixmap_.isNull()) {
         petVisual_->setText(QString{});
+        updatePetAvatar();
     } else {
+        petAvatarPixmap_ = QPixmap{};
         petVisual_->setPixmap(QPixmap{});
         petVisual_->setText(QStringLiteral("ʕ •ᴥ• ʔ\n\n小 屏"));
     }
@@ -298,6 +305,16 @@ void MainWindow::applyUiConfig(const UiConfig& config)
             resolveConfiguredAssetPath(uiConfig_.conversationAvatarPath));
     }
     screenObservation_->applyConfiguration(uiConfig_);
+}
+
+void MainWindow::updatePetAvatar()
+{
+    if (petAvatarPixmap_.isNull() || petVisual_ == nullptr) return;
+    QSize target = petVisual_->size();
+    if (target.width() <= 0 || target.height() <= 0) target = size();
+    if (target.width() <= 0 || target.height() <= 0) return;
+    petVisual_->setPixmap(petAvatarPixmap_.scaled(
+        target, Qt::KeepAspectRatio, Qt::SmoothTransformation));
 }
 
 void MainWindow::sendCurrentMessage()
@@ -549,7 +566,7 @@ void MainWindow::mousePressEvent(QMouseEvent* event)
 {
     if (event->button() == Qt::LeftButton) {
         dragging_ = true;
-        dragOffset_ = event->globalPos() - frameGeometry().topLeft();
+        dragOffset_ = event->globalPosition().toPoint() - frameGeometry().topLeft();
         event->accept();
         return;
     }
@@ -559,8 +576,8 @@ void MainWindow::mousePressEvent(QMouseEvent* event)
 void MainWindow::mouseMoveEvent(QMouseEvent* event)
 {
     if (dragging_ && (event->buttons() & Qt::LeftButton)) {
-        const QPoint desired = event->globalPos() - dragOffset_;
-        QScreen* screen = QGuiApplication::screenAt(event->globalPos());
+        const QPoint desired = event->globalPosition().toPoint() - dragOffset_;
+        QScreen* screen = QGuiApplication::screenAt(event->globalPosition().toPoint());
         if (screen == nullptr) screen = QGuiApplication::screenAt(frameGeometry().center());
         if (screen == nullptr) screen = QGuiApplication::primaryScreen();
         move(screen == nullptr ? desired : WindowPlacement::clamp(
@@ -575,6 +592,13 @@ void MainWindow::mouseReleaseEvent(QMouseEvent* event)
 {
     dragging_ = false;
     QMainWindow::mouseReleaseEvent(event);
+}
+
+void MainWindow::resizeEvent(QResizeEvent* event)
+{
+    QMainWindow::resizeEvent(event);
+    // 布局重排尚未完成，延迟到事件循环后再缩放，避免拿到过期尺寸。
+    QTimer::singleShot(0, this, [this]() { updatePetAvatar(); });
 }
 
 void MainWindow::showEvent(QShowEvent* event)

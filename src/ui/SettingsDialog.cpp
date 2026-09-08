@@ -4,17 +4,21 @@
 #include <QCheckBox>
 #include <QFormLayout>
 #include <QGroupBox>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QScreen>
+#include <QScrollArea>
 #include <QSpinBox>
 #include <QVBoxLayout>
 
 #include "app/SettingsController.h"
 #include "infrastructure/DesktopWindowPolicy.h"
 #include "infrastructure/ScreenCapture.h"
+#include "infrastructure/WindowPlacement.h"
 #include "app/ErrorCenter.h"
 
 namespace zhu_screen_pet {
@@ -35,9 +39,14 @@ SettingsDialog::SettingsDialog(SettingsController* controller, QWidget* parent,
     setWindowTitle(QStringLiteral("设置"));
     setObjectName(QStringLiteral("settingsDialog"));
     DesktopWindowPolicy::setExcludedFromCapture(this, true);
-    resize(560, 780);
+    const QRect available = QGuiApplication::primaryScreen()
+        ? QGuiApplication::primaryScreen()->availableGeometry()
+        : QRect(0, 0, 1920, 1080);
+    resize(WindowPlacement::scaleForScreen(QSize(480, 660), available));
+    setMinimumSize(WindowPlacement::scaleForScreen(QSize(360, 420), available));
     setStyleSheet(QStringLiteral(
         "QDialog#settingsDialog{background:#fffaf0;color:#26375d;}"
+        "QScrollArea{background:transparent;border:none;}"
         "QGroupBox{background:#fffdf8;border:1px solid #dfd3bd;border-radius:12px;"
         "margin-top:12px;padding:12px 8px 8px 8px;color:#32466f;font-weight:600;}"
         "QGroupBox::title{subcontrol-origin:margin;left:12px;padding:0 5px;}"
@@ -47,7 +56,15 @@ SettingsDialog::SettingsDialog(SettingsController* controller, QWidget* parent,
         "border-radius:9px;padding:7px 12px;} QPushButton:hover{background:#ccdeff;}"
         "QPushButton#settingsApplyButton{background:#79adf3;color:#17345f;border:none;}"));
     auto* root = new QVBoxLayout(this);
-    auto* modelBox = new QGroupBox(QStringLiteral("模型"), this);
+    auto* scrollArea = new QScrollArea(this);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto* content = new QWidget(scrollArea);
+    scrollArea->setWidget(content);
+    auto* contentLayout = new QVBoxLayout(content);
+    contentLayout->setContentsMargins(0, 0, 0, 0);
+    contentLayout->setSpacing(8);
+    auto* modelBox = new QGroupBox(QStringLiteral("模型"), content);
     auto* modelForm = new QFormLayout(modelBox);
     profile_ = new QComboBox(modelBox);
     profile_->setObjectName(QStringLiteral("settingsModelProfile"));
@@ -81,7 +98,7 @@ SettingsDialog::SettingsDialog(SettingsController* controller, QWidget* parent,
     modelForm->addRow(QStringLiteral("最大重试次数"), maxRetries_);
     modelForm->addRow(QStringLiteral("重试基础延迟（毫秒）"), retryDelayMs_);
 
-    auto* personaBox = new QGroupBox(QStringLiteral("人格"), this);
+    auto* personaBox = new QGroupBox(QStringLiteral("人格"), content);
     personaBox->setObjectName(QStringLiteral("settingsPersonaGroup"));
     auto* personaForm = new QFormLayout(personaBox);
     userAddress_ = new QLineEdit(personaBox);
@@ -93,7 +110,7 @@ SettingsDialog::SettingsDialog(SettingsController* controller, QWidget* parent,
     personaForm->addRow(QStringLiteral("最大回复 Token"), maxReplyTokens_);
     personaForm->addRow(QStringLiteral("主动程度（0-3）"), proactiveLevel_);
 
-    auto* memoryBox = new QGroupBox(QStringLiteral("记忆限制"), this);
+    auto* memoryBox = new QGroupBox(QStringLiteral("记忆限制"), content);
     auto* memoryForm = new QFormLayout(memoryBox);
     recentLimit_ = spin(memoryBox, MemoryLimits::MinimumRecentMessages,
                         MemoryLimits::MaximumRecentMessages);
@@ -112,13 +129,13 @@ SettingsDialog::SettingsDialog(SettingsController* controller, QWidget* parent,
     memoryForm->addRow(QStringLiteral("长期记忆条数"), longTermLimit_);
     memoryForm->addRow(QStringLiteral("总上下文 Token"), contextTokens_);
 
-    auto* uiBox = new QGroupBox(QStringLiteral("界面"), this);
+    auto* uiBox = new QGroupBox(QStringLiteral("界面"), content);
     auto* uiForm = new QFormLayout(uiBox);
     bubbleDurationSeconds_ = spin(uiBox, 1, 300);
     bubbleDurationSeconds_->setSuffix(QStringLiteral(" 秒"));
     uiForm->addRow(QStringLiteral("回复气泡显示时间"), bubbleDurationSeconds_);
 
-    auto* captureBox = new QGroupBox(QStringLiteral("屏幕截图"), this);
+    auto* captureBox = new QGroupBox(QStringLiteral("屏幕截图"), content);
     auto* captureForm = new QFormLayout(captureBox);
     screenCaptureEnabled_ = new QCheckBox(
         QStringLiteral("允许把屏幕截图发送给当前模型"), captureBox);
@@ -203,11 +220,12 @@ SettingsDialog::SettingsDialog(SettingsController* controller, QWidget* parent,
     buttons->addWidget(status_, 1);
     buttons->addWidget(apply);
     buttons->addWidget(close);
-    root->addWidget(modelBox);
-    root->addWidget(personaBox);
-    root->addWidget(memoryBox);
-    root->addWidget(uiBox);
-    root->addWidget(captureBox);
+    contentLayout->addWidget(modelBox);
+    contentLayout->addWidget(personaBox);
+    contentLayout->addWidget(memoryBox);
+    contentLayout->addWidget(uiBox);
+    contentLayout->addWidget(captureBox);
+    root->addWidget(scrollArea, 1);
     root->addLayout(buttons);
     connect(profile_, qOverload<int>(&QComboBox::currentIndexChanged),
             this, &SettingsDialog::loadSelectedProfile);

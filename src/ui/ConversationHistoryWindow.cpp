@@ -1,9 +1,11 @@
 #include "ui/ConversationHistoryWindow.h"
 
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPixmap>
 #include <QPushButton>
+#include <QScreen>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSizePolicy>
@@ -11,6 +13,7 @@
 #include <QVBoxLayout>
 
 #include "infrastructure/DesktopWindowPolicy.h"
+#include "infrastructure/WindowPlacement.h"
 
 namespace zhu_screen_pet {
 
@@ -21,8 +24,11 @@ ConversationHistoryWindow::ConversationHistoryWindow(QWidget* parent)
     setAttribute(Qt::WA_StyledBackground, true);
     setWindowTitle(QStringLiteral("会话历史"));
     DesktopWindowPolicy::apply(this, {true, true, false, true, true, false});
-    resize(760, 620);
-    setMinimumSize(520, 420);
+    const QRect available = QGuiApplication::primaryScreen()
+        ? QGuiApplication::primaryScreen()->availableGeometry()
+        : QRect(0, 0, 1920, 1080);
+    resize(WindowPlacement::scaleForScreen(QSize(620, 540), available));
+    setMinimumSize(WindowPlacement::scaleForScreen(QSize(460, 390), available));
     setStyleSheet(QStringLiteral(
         "QWidget#conversationHistoryWindow{background:#fffaf0;border:1px solid #b8c9e8;border-radius:24px;}"
         "QLabel#conversationHistoryTitle{color:#26375d;font-size:18px;font-weight:600;}"

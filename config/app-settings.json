@@ -21,8 +21,8 @@
         "max_context_tokens": 8000
     },
     "ui": {
-        "app_icon_path": "",
-        "conversation_avatar_path": "",
+        "app_icon_path": "app-icon.png",
+        "conversation_avatar_path": "conversation_avatar.png",
         "screen_capture_enabled": false,
         "automatic_screen_analysis_enabled": false,
         "screen_capture_interval_ms": 5000,
@@ -32,7 +32,7 @@
         "capture_quality": 75,
         "reply_bubble_duration_ms": 15000,
         "hover_hide_delay_ms": 600,
-        "pet_avatar_path": "",
+        "pet_avatar_path": "pet_avatar.png",
         "fade_duration_ms": 180
     },
     "model_error_messages": {

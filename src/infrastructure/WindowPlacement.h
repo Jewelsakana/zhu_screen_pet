@@ -70,6 +70,8 @@ public:
         const HorizontalWindowChainRequest& request);
     static QPoint clamp(const QRect& availableGeometry, const QSize& windowSize,
                         const QPoint& desiredPosition);
+    static QSize scaleForScreen(const QSize& designSize,
+                                const QRect& availableGeometry);
     static AttachmentSide opposite(AttachmentSide side);
 };
 

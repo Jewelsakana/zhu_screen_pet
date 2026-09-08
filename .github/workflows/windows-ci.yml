@@ -10,11 +10,11 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Install Qt 5.15.2
+      - name: Install Qt 6.8.3
         uses: jurplel/install-qt-action@v4
         with:
-          version: 5.15.2
-          arch: win64_msvc2019_64
+          version: 6.8.3
+          arch: win64_msvc2022_64
           cache: true
       - name: Configure
         run: >-

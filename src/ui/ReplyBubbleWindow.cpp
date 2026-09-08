@@ -161,7 +161,7 @@ QString ReplyBubbleWindow::content() const { return content_->toPlainText(); }
 int ReplyBubbleWindow::displayDuration() const { return displayDurationMs_; }
 bool ReplyBubbleWindow::dismissalTimerActive() const { return dismissalTimer_->isActive(); }
 
-void ReplyBubbleWindow::enterEvent(QEvent* event)
+void ReplyBubbleWindow::enterEvent(QEnterEvent* event)
 {
     if (dismissalTimer_->isActive()) {
         remainingMs_ = qMax(1, dismissalTimer_->remainingTime());

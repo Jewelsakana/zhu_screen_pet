@@ -1,6 +1,7 @@
 #include "infrastructure/WindowPlacement.h"
 
 #include <QtGlobal>
+#include <QtMath>
 
 namespace zhu_screen_pet {
 namespace {
@@ -68,6 +69,23 @@ QPoint WindowPlacement::clamp(const QRect& availableGeometry, const QSize& windo
                    qMax(availableGeometry.left(), maxX)),
             qBound(availableGeometry.top(), desiredPosition.y(),
                    qMax(availableGeometry.top(), maxY))};
+}
+
+QSize WindowPlacement::scaleForScreen(const QSize& designSize,
+                                      const QRect& availableGeometry)
+{
+    // 设计尺寸以约 1080p 屏幕的可用高度（≈1000 逻辑像素）为基准等比缩放，
+    // 让窗口在不同分辨率下保持相似的屏幕占比。
+    constexpr qreal kReferenceHeight = 1000.0;
+    const int availableHeight = qMax(1, availableGeometry.height());
+    const qreal scale = qreal(availableHeight) / kReferenceHeight;
+    const QSize scaled(qMax(1, qRound(designSize.width() * scale)),
+                       qMax(1, qRound(designSize.height() * scale)));
+    // 兜底：结果不超过可用区域，避免小屏/多屏边缘场景下窗口溢出。
+    const int maxWidth = qMax(120, availableGeometry.width());
+    const int maxHeight = qMax(120, availableGeometry.height());
+    return QSize(qMin(scaled.width(), maxWidth),
+                 qMin(scaled.height(), maxHeight));
 }
 
 AttachmentSide WindowPlacement::opposite(AttachmentSide side)

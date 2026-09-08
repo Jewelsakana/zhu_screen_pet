@@ -173,7 +173,7 @@ void ChatController::cancelAll()
 
 int ChatController::pendingRequestCount() const
 {
-    return pending_.size();
+    return static_cast<int>(pending_.size());
 }
 
 AppError ChatController::lastAppError() const

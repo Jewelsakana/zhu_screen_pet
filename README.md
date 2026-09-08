@@ -1,14 +1,14 @@
 # 小珠看着你
 
-使用 C++17、Qt 5.15 和 CMake 构建的屏幕桌宠项目。当前已完成聊天 MVP。
+使用 C++17、Qt 6 和 CMake 构建的屏幕桌宠项目。当前已完成聊天 MVP。
 
 ## 构建
 
-Qt 和编译器必须匹配。当前工程使用 Qt 5.15 的 MSVC 版本，因此请在 **x64 Native Tools Command Prompt for VS** 中执行：
+Qt 和编译器必须匹配。当前工程使用 Qt 6 的 MSVC 版本，因此请在 **x64 Native Tools Command Prompt for VS** 中执行：
 
 ```powershell
 cmake -S . -B build -G Ninja `
-  -DCMAKE_PREFIX_PATH=D:/Qt/5.15.2/msvc2019_64 `
+  -DCMAKE_PREFIX_PATH=D:/Qt/6.8.3/msvc2022_64 `
   -DZHU_SCREEN_PET_BUILD_TESTS=ON
 cmake --build build
 ctest --test-dir build --output-on-failure
@@ -18,7 +18,7 @@ ctest --test-dir build --output-on-failure
 
 ```powershell
 cmake -S . -B build-vs `
-  -DCMAKE_PREFIX_PATH=D:/Qt/5.15.2/msvc2019_64 `
+  -DCMAKE_PREFIX_PATH=D:/Qt/6.8.3/msvc2022_64 `
   -DZHU_SCREEN_PET_BUILD_TESTS=ON
 cmake --build build-vs --config Debug
 ctest --test-dir build-vs -C Debug --output-on-failure
@@ -32,7 +32,7 @@ Windows 便携发布包必须使用 Release 配置。配置并验证完成后，
 ```powershell
 cmake -S . -B build-release -G Ninja `
   -DCMAKE_BUILD_TYPE=Release `
-  -DCMAKE_PREFIX_PATH=D:/Qt/5.15.2/msvc2019_64 `
+  -DCMAKE_PREFIX_PATH=D:/Qt/6.8.3/msvc2022_64 `
   -DZHU_SCREEN_PET_BUILD_TESTS=ON
 cmake --build build-release
 ctest --test-dir build-release --output-on-failure

@@ -10,6 +10,7 @@ class QHBoxLayout;
 class QPushButton;
 class QTextBrowser;
 class QTimer;
+class QEnterEvent;
 
 namespace zhu_screen_pet {
 
@@ -32,7 +33,7 @@ public:
     bool dismissalTimerActive() const;
 
 protected:
-    void enterEvent(QEvent* event) override;
+    void enterEvent(QEnterEvent* event) override;
     void leaveEvent(QEvent* event) override;
 
 private:
