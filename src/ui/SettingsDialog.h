@@ -15,6 +15,7 @@ namespace zhu_screen_pet {
 
 class SettingsController;
 class ScreenCapture;
+class CaptureUiController;
 
 /** 设置窗口：编辑模型、用户称呼和记忆限制；核心人设由配置文件管理。 */
 class SettingsDialog final : public QDialog
@@ -23,7 +24,8 @@ class SettingsDialog final : public QDialog
 
 public:
     explicit SettingsDialog(SettingsController* controller, QWidget* parent = nullptr,
-                            ScreenCapture* screenCapture = nullptr);
+                            ScreenCapture* screenCapture = nullptr,
+                            CaptureUiController* captureUiController = nullptr);
 
 private slots:
     void loadSelectedProfile(int index);
@@ -34,6 +36,7 @@ private slots:
 private:
     void populate();
     void showError(const AppError& error);
+    void updateCaptureExclusionStatus();
 
     SettingsController* controller_ = nullptr;
     QComboBox* profile_ = nullptr;
@@ -54,10 +57,12 @@ private:
     QSpinBox* longTermLimit_ = nullptr;
     QSpinBox* contextTokens_ = nullptr;
     QSpinBox* bubbleDurationSeconds_ = nullptr;
+    QSpinBox* windowScalePercent_ = nullptr;
     QCheckBox* screenCaptureEnabled_ = nullptr;
     QCheckBox* automaticScreenAnalysisEnabled_ = nullptr;
     QSpinBox* screenCaptureIntervalSeconds_ = nullptr;
     QCheckBox* captureOnChat_ = nullptr;
+    QCheckBox* includeOwnWindowsInCapture_ = nullptr;
     QComboBox* captureImageFormat_ = nullptr;
     QSpinBox* captureMaxWidth_ = nullptr;
     QSpinBox* captureQuality_ = nullptr;
@@ -65,6 +70,8 @@ private:
     QLabel* status_ = nullptr;
     ModelProviderConfig editingModel_;
     ScreenCapture* screenCapture_ = nullptr;
+    CaptureUiController* captureUiController_ = nullptr;
+    QLabel* captureExclusionStatus_ = nullptr;
 };
 
 } // namespace zhu_screen_pet

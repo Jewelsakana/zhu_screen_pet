@@ -35,6 +35,9 @@ public:
                  const UiConfig& ui,
                  const QString& apiKey,
                  AppError* error = nullptr);
+    /** 复用同一事务与回滚策略，只更新应用 UI 配置。 */
+    bool executeUi(const PersonaConfig& persona, const MemoryLimits& limits,
+                   const UiConfig& ui, AppError* error = nullptr);
 
 private:
     AppError failure(AppErrorCode code, const QString& message,

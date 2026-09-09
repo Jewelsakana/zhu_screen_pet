@@ -1,6 +1,7 @@
 #include "model/ModelProviderConfig.h"
 
 #include <QUrl>
+#include <QHostAddress>
 
 namespace zhu_screen_pet {
 
@@ -50,6 +51,16 @@ bool ModelProviderConfig::validate(QString* errorMessage) const
                            && url.scheme() != QStringLiteral("https"))
         || url.host().isEmpty()) {
         return fail(QStringLiteral("model base URL must be a valid HTTP(S) URL"));
+    }
+    if (url.scheme() == QStringLiteral("http")) {
+        const QString host = url.host().toLower();
+        QHostAddress address;
+        const bool loopback = host == QStringLiteral("localhost")
+            || (address.setAddress(host) && address.isLoopback());
+        if (!loopback) {
+            return fail(QStringLiteral(
+                "unencrypted HTTP is only allowed for localhost; use HTTPS for remote providers"));
+        }
     }
     if (config.model.isEmpty()) return fail(QStringLiteral("model name must not be empty"));
     if (config.displayName.isEmpty()) return fail(QStringLiteral("provider display name must not be empty"));

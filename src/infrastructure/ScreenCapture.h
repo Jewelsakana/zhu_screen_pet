@@ -6,6 +6,7 @@
 #include <QSize>
 
 #include "infrastructure/ImageCompressor.h"
+#include "infrastructure/ScreenCapturePolicy.h"
 
 class QTimer;
 
@@ -50,7 +51,7 @@ public:
                       CaptureTrigger trigger = CaptureTrigger::Chat);
     /** 删除指定的一张由本服务生成的截图。 */
     bool removeCapture(const QString& filePath, QString* errorMessage = nullptr) const;
-    /** 清除本服务生成的截图文件，但保留截图目录本身。 */
+    /** 显式清除手动测试生成的截图文件，但保留截图目录本身。 */
     bool clearCaptures(QString* errorMessage = nullptr) const;
 
 signals:
@@ -66,7 +67,7 @@ private:
 
     QTimer* timer_ = nullptr;
     bool enabled_ = false;
-    int intervalMs_ = 5000;
+    int intervalMs_ = 60000;
     QString captureDirectory_;
     ImageCompressionOptions options_;
 };

@@ -32,12 +32,14 @@ public:
     void appendAssistantDelta(const QString& delta);
     void finishAssistantReply(const QString& content);
     void setPetAvatarPath(const QString& path);
+    void setUiScalePercent(int percent);
 
 signals:
     void olderMessagesRequested();
 
 private:
     QLabel* addMessageBubble(MessageRole role, const QString& content);
+    void applyMessageBubbleStyle(QLabel* bubble) const;
     void clearMessages();
     void scrollToBottom();
 
@@ -51,6 +53,7 @@ private:
     QString petAvatarPath_;
     bool hasOlderMessages_ = false;
     bool olderRequestPending_ = false;
+    int uiScalePercent_ = 100;
 };
 
 } // namespace zhu_screen_pet

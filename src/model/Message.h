@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QByteArray>
+#include <QSize>
 #include <QString>
 
 #include <utility>
@@ -21,6 +22,8 @@ struct MessageImage
     QByteArray data;
     QString mimeType = QStringLiteral("image/jpeg");
     QString detail = QStringLiteral("original");
+    /** 实际发送尺寸，用于预留视觉输入 token。 */
+    QSize size;
 
     bool isValid() const { return !data.isEmpty(); }
 };

@@ -8,8 +8,10 @@
 #include <QTextBrowser>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <QtMath>
 
 #include "infrastructure/DesktopWindowPolicy.h"
+#include "ui/UiScaleMetrics.h"
 
 namespace zhu_screen_pet {
 namespace {
@@ -107,6 +109,22 @@ ReplyBubbleWindow::ReplyBubbleWindow(QWidget* parent)
 void ReplyBubbleWindow::setDisplayDuration(int durationMs)
 {
     displayDurationMs_ = qBound(1000, durationMs, 300000);
+}
+
+void ReplyBubbleWindow::setUiScalePercent(int percent)
+{
+    const UiScaleMetrics metrics(percent);
+    rootLayout_->setContentsMargins(metrics.scaled(1), metrics.scaled(1),
+                                    metrics.scaled(1), metrics.scaled(1));
+    if (auto* cardLayout = qobject_cast<QVBoxLayout*>(card_->layout())) {
+        cardLayout->setContentsMargins(metrics.scaled(15), metrics.scaled(10),
+                                       metrics.scaled(11), metrics.scaled(13));
+    }
+    tail_->setFixedSize(metrics.scaled(22), metrics.scaled(38));
+    content_->setMinimumHeight(metrics.scaled(60));
+    content_->setMaximumHeight(metrics.scaled(220));
+    setFixedWidth(metrics.scaled(352));
+    adjustSize();
 }
 
 void ReplyBubbleWindow::beginReply()

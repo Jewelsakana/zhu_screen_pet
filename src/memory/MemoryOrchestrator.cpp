@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include <QSet>
+#include <QtMath>
 
 namespace zhu_screen_pet {
 
@@ -72,7 +73,7 @@ MemoryContext MemoryOrchestrator::buildContext(const ContextRequest& request,
         ? request.longTermMemoryLimit : configured.longTermMemoryLimit;
 
     const Message current = Message::create(MessageRole::User, request.currentInput);
-    int usedTokens = estimateTokens(current.content);
+    int usedTokens = estimateTokens(current.content) + qMax(0, request.reservedInputTokens);
     if (usedTokens > maxTokens) {
         if (errorMessage) *errorMessage = QStringLiteral(
             "current input exceeds the configured context token budget");
@@ -306,6 +307,24 @@ int MemoryOrchestrator::estimateTokens(const QString& text)
         }
     }
     return std::max(1, tokens + (asciiRun + 3) / 4);
+}
+
+int MemoryOrchestrator::estimateImageTokens(const QSize& sourceSize, const QString& detail)
+{
+    if (!sourceSize.isValid() || sourceSize.isEmpty()) return 0;
+    if (detail.compare(QStringLiteral("low"), Qt::CaseInsensitive) == 0) return 85;
+
+    QSize size = sourceSize;
+    if (size.width() > 2048 || size.height() > 2048) {
+        size.scale(2048, 2048, Qt::KeepAspectRatio);
+    }
+    if (qMin(size.width(), size.height()) > 768) {
+        const qreal factor = 768.0 / qMin(size.width(), size.height());
+        size = QSize(qMax(1, qRound(size.width() * factor)),
+                     qMax(1, qRound(size.height() * factor)));
+    }
+    const int tiles = qCeil(size.width() / 512.0) * qCeil(size.height() / 512.0);
+    return 85 + 170 * qMax(1, tiles);
 }
 
 } // namespace zhu_screen_pet

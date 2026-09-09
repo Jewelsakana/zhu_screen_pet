@@ -30,7 +30,7 @@ private slots:
         ImageCompressionOptions options;
         options.maxWidth = 640;
         options.quality = 60;
-        capture.configure(false, 5000, directory.path(), options);
+        capture.configure(false, 30000, directory.path(), options);
         QSignalSpy capturedSpy(&capture, &ScreenCapture::captured);
         QString error;
         if (!capture.captureNow(&error)) {
@@ -47,7 +47,7 @@ private slots:
         QVERIFY(!QFileInfo::exists(image.filePath));
     }
 
-    void automaticUploadIsOffByDefaultAndDiscarded()
+    void automaticUploadIsOffByDefaultAndRemainsMemoryOnly()
     {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -60,18 +60,12 @@ private slots:
         coordinator.applyConfiguration(config);
         QSignalSpy readySpy(&coordinator,
                             &ScreenObservationCoordinator::scheduledImageReady);
-        const QString path = directory.filePath(QStringLiteral("capture_disabled.jpeg"));
-        QFile file(path);
-        QVERIFY(file.open(QIODevice::WriteOnly));
-        QVERIFY(file.write("image") > 0);
-        file.close();
         CapturedImage image;
         image.data = QByteArrayLiteral("image");
-        image.filePath = path;
         image.trigger = CaptureTrigger::Scheduled;
         emit coordinator.screenCapture()->captured(image);
         QCOMPARE(readySpy.count(), 0);
-        QVERIFY(!QFileInfo::exists(path));
+        QCOMPARE(QDir(directory.path()).entryList(QDir::Files).size(), 0);
     }
 
     void scheduledCaptureStaysInMemory()
@@ -80,7 +74,7 @@ private slots:
         QVERIFY(directory.isValid());
         ScreenCapture capture;
         ImageCompressionOptions options;
-        capture.configure(true, 5000, directory.path(), options);
+        capture.configure(true, 30000, directory.path(), options);
         CapturedImage image;
         QString error;
         if (!capture.captureImage(&image, &error, CaptureTrigger::Scheduled)) {
@@ -90,6 +84,42 @@ private slots:
         QVERIFY(!image.data.isEmpty());
         QVERIFY(image.filePath.isEmpty());
         QCOMPARE(QDir(directory.path()).entryList(QDir::Files).size(), 0);
+    }
+
+    void fingerprintResetsAcrossConversationAndAutomaticRestart()
+    {
+        ScreenObservationCoordinator coordinator;
+        coordinator.setObservationReady(true);
+        UiConfig config;
+        config.screenCaptureEnabled = true;
+        config.automaticScreenAnalysisEnabled = true;
+        coordinator.applyConfiguration(config);
+        coordinator.setObservationScope(QStringLiteral("conversation-a"));
+        QSignalSpy readySpy(&coordinator,
+                            &ScreenObservationCoordinator::scheduledImageReady);
+        CapturedImage image;
+        image.data = QByteArrayLiteral("image");
+        image.fingerprint = QByteArray(
+            (ScreenFingerprint::Width * ScreenFingerprint::Height + 7) / 8, '\0');
+        image.trigger = CaptureTrigger::Scheduled;
+
+        emit coordinator.screenCapture()->captured(image);
+        QCOMPARE(readySpy.count(), 1);
+        coordinator.finishScheduledRequest();
+        emit coordinator.screenCapture()->captured(image);
+        QCOMPARE(readySpy.count(), 1);
+
+        coordinator.setObservationScope(QStringLiteral("conversation-b"));
+        emit coordinator.screenCapture()->captured(image);
+        QCOMPARE(readySpy.count(), 2);
+        coordinator.finishScheduledRequest();
+
+        config.automaticScreenAnalysisEnabled = false;
+        coordinator.applyConfiguration(config);
+        config.automaticScreenAnalysisEnabled = true;
+        coordinator.applyConfiguration(config);
+        emit coordinator.screenCapture()->captured(image);
+        QCOMPARE(readySpy.count(), 3);
     }
 
     void fingerprintUsesThreePercentChangeThreshold()

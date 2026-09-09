@@ -17,6 +17,12 @@ UiConfig UiConfig::normalized() const
     result.replyBubbleDurationMs = qBound(1000, result.replyBubbleDurationMs, 300000);
     result.hoverHideDelayMs = qBound(100, result.hoverHideDelayMs, 5000);
     result.fadeDurationMs = qBound(0, result.fadeDurationMs, 2000);
+    result.windowScalePercent = qBound(MinimumWindowScalePercent,
+                                       result.windowScalePercent,
+                                       MaximumWindowScalePercent);
+    result.screenCaptureIntervalMs = qBound(MinimumScreenCaptureIntervalMs,
+                                             result.screenCaptureIntervalMs,
+                                             MaximumScreenCaptureIntervalMs);
     return result;
 }
 
@@ -24,11 +30,14 @@ bool UiConfig::validate(QString* errorMessage) const
 {
     if (replyBubbleDurationMs < 1000 || replyBubbleDurationMs > 300000
         || hoverHideDelayMs < 100 || hoverHideDelayMs > 5000
-        || fadeDurationMs < 0 || fadeDurationMs > 2000) {
+        || fadeDurationMs < 0 || fadeDurationMs > 2000
+        || windowScalePercent < MinimumWindowScalePercent
+        || windowScalePercent > MaximumWindowScalePercent) {
         if (errorMessage) *errorMessage = QStringLiteral("UI timing configuration is out of range");
         return false;
     }
-    if (screenCaptureIntervalMs < 1000 || screenCaptureIntervalMs > 600000
+    if (screenCaptureIntervalMs < MinimumScreenCaptureIntervalMs
+        || screenCaptureIntervalMs > MaximumScreenCaptureIntervalMs
         || captureMaxWidth < 1 || captureMaxWidth > 8192
         || captureQuality < 1 || captureQuality > 100) {
         if (errorMessage) *errorMessage = QStringLiteral("截图配置超出范围");

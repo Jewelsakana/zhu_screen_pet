@@ -9,6 +9,7 @@
 #include <QHideEvent>
 #include <QLabel>
 #include <QMouseEvent>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QPixmap>
 #include <QResizeEvent>
@@ -17,6 +18,7 @@
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QtMath>
 
 #include "app/ChatController.h"
 #include "app/ConversationController.h"
@@ -29,12 +31,15 @@
 #include "infrastructure/WindowPlacement.h"
 #include "ui/ActionPanel.h"
 #include "ui/ChatInputPanel.h"
+#include "ui/CaptureUiController.h"
 #include "ui/ConversationWindow.h"
 #include "ui/ConversationHistoryWindow.h"
 #include "ui/ErrorBannerWindow.h"
 #include "ui/HoverRevealController.h"
+#include "ui/PetWindowResizeController.h"
 #include "ui/ReplyBubbleWindow.h"
 #include "ui/SettingsDialog.h"
+#include "ui/UiScaleMetrics.h"
 
 namespace zhu_screen_pet {
 
@@ -45,6 +50,7 @@ QString resolveConfiguredAssetPath(const QString& configuredPath)
     if (path.isEmpty() || QDir::isAbsolutePath(path)) return path;
     return QDir(QCoreApplication::applicationDirPath()).filePath(path);
 }
+
 }
 
 MainWindow::MainWindow(QWidget* parent)
@@ -83,6 +89,22 @@ MainWindow::MainWindow(QWidget* parent)
     layout->addWidget(petVisual_, 1);
     layout->addWidget(stateLabel_);
     setCentralWidget(surface);
+    setMouseTracking(true);
+    surface->setMouseTracking(true);
+    surface->installEventFilter(this);
+    resizeController_ = new PetWindowResizeController(this, this);
+    connect(resizeController_, &PetWindowResizeController::scalePreviewRequested,
+            this, [this](int percent) {
+                uiConfig_.windowScalePercent = percent;
+                applyWindowScale();
+            });
+    connect(resizeController_, &PetWindowResizeController::scaleCommitRequested,
+            this, [this](int) { persistInteractiveScale(); });
+    connect(resizeController_, &PetWindowResizeController::windowGeometryChanged,
+            this, [this]() {
+                if (attachments_ != nullptr) attachments_->reposition();
+                repositionConversationChain();
+            });
     screenObservation_ = new ScreenObservationCoordinator(this);
     connect(screenObservation_, &ScreenObservationCoordinator::operationFailed,
             this, [this](const AppError& error) {
@@ -91,6 +113,12 @@ MainWindow::MainWindow(QWidget* parent)
             });
     connect(screenObservation_, &ScreenObservationCoordinator::scheduledImageReady,
             this, &MainWindow::onScreenCaptured);
+    captureUiController_ = new CaptureUiController(screenObservation_, this);
+    connect(captureUiController_, &CaptureUiController::operationFailed,
+            this, [this](const AppError& error) {
+                if (errorCenter_ != nullptr) errorCenter_->report(error);
+                else onOperationFailed(error);
+            });
     createOverlayWindows();
 }
 
@@ -117,6 +145,12 @@ void MainWindow::createOverlayWindows()
     conversationWindow_ = new ConversationWindow();
     actionHotZone_ = createHotZone(QStringLiteral("actionRevealHotZone"), QSize(44, 220));
     inputHotZone_ = createHotZone(QStringLiteral("inputRevealHotZone"), QSize(420, 44));
+    for (QWidget* window : {static_cast<QWidget*>(this), static_cast<QWidget*>(actionPanel_),
+                            static_cast<QWidget*>(inputPanel_), static_cast<QWidget*>(replyBubble_),
+                            static_cast<QWidget*>(errorBanner_), static_cast<QWidget*>(conversationWindow_),
+                            actionHotZone_, inputHotZone_}) {
+        captureUiController_->registerWindow(window);
+    }
     attachments_ = new WindowAttachmentManager(this);
     attachments_->setAnchor(this);
     connect(attachments_, &WindowAttachmentManager::attachmentPositioned,
@@ -150,6 +184,10 @@ void MainWindow::createOverlayWindows()
     connect(actionPanel_, &ActionPanel::settingsRequested, this, &MainWindow::openSettings);
     connect(actionPanel_, &ActionPanel::conversationsRequested,
             this, &MainWindow::openConversationWindow);
+    connect(actionPanel_, &ActionPanel::screenCaptureToggled,
+            this, &MainWindow::toggleScreenCapture);
+    connect(actionPanel_, &ActionPanel::captureOnChatToggled,
+            this, &MainWindow::toggleCaptureOnChat);
     connect(inputPanel_, &ChatInputPanel::sendRequested, this, &MainWindow::sendCurrentMessage);
     connect(inputPanel_, &ChatInputPanel::cancelRequested, this, &MainWindow::cancelCurrentRequest);
     connect(inputPanel_, &ChatInputPanel::retryRequested, this, &MainWindow::retryLastMessage);
@@ -158,6 +196,7 @@ void MainWindow::createOverlayWindows()
     connect(conversationWindow_, &ConversationWindow::historyWindowShown, this, [this]() {
         if (ConversationHistoryWindow* history = conversationWindow_->historyWindow()) {
             history->installEventFilter(this);
+            captureUiController_->registerWindow(history);
         }
         repositionConversationChain();
     });
@@ -190,7 +229,8 @@ void MainWindow::repositionConversationChain()
     ConversationHistoryWindow* history = conversationWindow_->historyWindow();
     if (history != nullptr && history->isVisible()) sizes.append(history->size());
     const HorizontalWindowChainResult placement = WindowPlacement::horizontalChain({
-        screen->availableGeometry(), anchorGeometry, sizes, AttachmentSide::Right, 12});
+        screen->availableGeometry(), anchorGeometry, sizes, AttachmentSide::Right,
+        qMax(1, qRound(12 * qreal(uiConfig_.windowScalePercent) / 100.0))});
     if (placement.positions.isEmpty()) return;
     repositioningConversationChain_ = true;
     conversationWindow_->move(placement.positions.at(0));
@@ -250,10 +290,13 @@ void MainWindow::setSettingsController(SettingsController* controller)
     if (settingsController_ == controller) return;
     if (settingsController_ != nullptr) disconnect(settingsController_, nullptr, this, nullptr);
     settingsController_ = controller;
+    captureUiController_->setSettingsController(controller);
     if (settingsController_ != nullptr) {
         applyUiConfig(settingsController_->uiConfig());
         connect(settingsController_, &SettingsController::uiConfigurationChanged,
                 this, &MainWindow::applyUiConfig);
+        connect(settingsController_, &SettingsController::settingsApplied,
+                this, [this]() { screenObservation_->resetFingerprint(); });
     }
 }
 
@@ -271,6 +314,7 @@ void MainWindow::setConversation(const QString& conversationId,
                                  const QVector<ConversationMessage>& messages)
 {
     conversationId_ = conversationId;
+    screenObservation_->setObservationScope(conversationId_);
     screenObservation_->setObservationReady(chatController_ != nullptr
                                              && !conversationId_.isEmpty());
     QString title;
@@ -286,7 +330,23 @@ ConversationWindow* MainWindow::conversationWindow() const { return conversation
 
 void MainWindow::applyUiConfig(const UiConfig& config)
 {
-    uiConfig_ = config.normalized();
+    const UiConfig requested = config.normalized();
+    uiConfig_ = captureUiController_->applyConfiguration(requested);
+    if (requested.automaticScreenAnalysisEnabled
+        && !uiConfig_.automaticScreenAnalysisEnabled
+        && settingsController_ != nullptr && !captureCorrectionPending_) {
+        captureCorrectionPending_ = true;
+        const UiConfig corrected = uiConfig_;
+        QTimer::singleShot(0, this, [this, corrected]() {
+            AppError ignored;
+            settingsController_->updateUiConfig(corrected, &ignored);
+            captureCorrectionPending_ = false;
+        });
+    }
+    applyWindowScale();
+    actionPanel_->setCaptureOptions(uiConfig_.screenCaptureEnabled, uiConfig_.captureOnChat);
+    attachments_->reposition();
+    repositionConversationChain();
     replyBubble_->setDisplayDuration(uiConfig_.replyBubbleDurationMs);
     actionReveal_->setTimings(uiConfig_.hoverHideDelayMs, uiConfig_.fadeDurationMs);
     inputReveal_->setTimings(uiConfig_.hoverHideDelayMs, uiConfig_.fadeDurationMs);
@@ -304,7 +364,83 @@ void MainWindow::applyUiConfig(const UiConfig& config)
         conversationWindow_->setConversationAvatarPath(
             resolveConfiguredAssetPath(uiConfig_.conversationAvatarPath));
     }
-    screenObservation_->applyConfiguration(uiConfig_);
+}
+
+void MainWindow::toggleScreenCapture(bool enabled)
+{
+    AppError error;
+    if (!captureUiController_->setScreenCaptureEnabled(enabled, &error)) {
+        actionPanel_->setCaptureOptions(uiConfig_.screenCaptureEnabled, uiConfig_.captureOnChat);
+    }
+}
+
+void MainWindow::toggleCaptureOnChat(bool enabled)
+{
+    if (!uiConfig_.screenCaptureEnabled) {
+        actionPanel_->setCaptureOptions(false, false);
+        return;
+    }
+    if (enabled
+        && QMessageBox::warning(
+            this, QStringLiteral("确认发送屏幕内容"),
+            QStringLiteral("启用后，屏幕截图会随用户消息发送给当前配置的远端模型，"
+                           "可能包含隐私信息并产生模型费用。是否继续？"),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) {
+        actionPanel_->setCaptureOptions(true, uiConfig_.captureOnChat);
+        return;
+    }
+    AppError error;
+    if (!captureUiController_->setCaptureOnChatEnabled(enabled, &error)) {
+        actionPanel_->setCaptureOptions(uiConfig_.screenCaptureEnabled, uiConfig_.captureOnChat);
+    }
+}
+
+void MainWindow::applyWindowScale()
+{
+    const int percent = uiConfig_.windowScalePercent;
+    resizeController_->setScalePercent(percent);
+    const UiScaleMetrics metrics(percent);
+    QScreen* targetScreen = QGuiApplication::screenAt(frameGeometry().center());
+    if (targetScreen == nullptr) targetScreen = screen();
+    if (targetScreen == nullptr) targetScreen = QGuiApplication::primaryScreen();
+    const QRect available = targetScreen == nullptr
+        ? QRect(0, 0, 1920, 1080) : targetScreen->availableGeometry();
+
+    setMinimumSize(metrics.scaledForScreen(QSize(240, 280), available));
+    resize(metrics.scaledForScreen(QSize(300, 350), available));
+    if (auto* petLayout = qobject_cast<QVBoxLayout*>(centralWidget()->layout())) {
+        petLayout->setContentsMargins(metrics.scaled(24), metrics.scaled(24),
+                                      metrics.scaled(24), metrics.scaled(20));
+    }
+    QFont petFont = petVisual_->font();
+    petFont.setPointSizeF(25.0 * metrics.factor());
+    petVisual_->setFont(petFont);
+
+    actionPanel_->setUiScalePercent(percent);
+    inputPanel_->setUiScalePercent(percent);
+    replyBubble_->setUiScalePercent(percent);
+    errorBanner_->setUiScalePercent(percent);
+    conversationWindow_->setUiScalePercent(percent);
+    actionHotZone_->setFixedSize(metrics.scaled(44), metrics.scaled(220));
+    inputHotZone_->setFixedSize(metrics.scaled(420), metrics.scaled(44));
+
+    attachments_->attach(actionPanel_, {AttachmentSide::Right,
+        AttachmentAlignment::Center, metrics.scaled(12)});
+    attachments_->attach(actionHotZone_, {AttachmentSide::Right,
+        AttachmentAlignment::Center, metrics.scaled(3)});
+    attachments_->attach(inputPanel_, {AttachmentSide::Below,
+        AttachmentAlignment::Center, metrics.scaled(12)});
+    attachments_->attach(inputHotZone_, {AttachmentSide::Below,
+        AttachmentAlignment::Center, metrics.scaled(3)});
+    attachments_->attach(replyBubble_, {AttachmentSide::Left,
+        AttachmentAlignment::Center, metrics.scaled(14)});
+    attachments_->attach(errorBanner_, {AttachmentSide::Above,
+        AttachmentAlignment::Center, metrics.scaled(12)});
+    if (!resizeController_->isResizing()) {
+        move(WindowPlacement::clamp(available, frameGeometry().size(), frameGeometry().topLeft()));
+    }
+    attachments_->reposition();
+    repositionConversationChain();
 }
 
 void MainWindow::updatePetAvatar()
@@ -338,6 +474,7 @@ void MainWindow::sendCurrentMessage()
         attachment.mimeType = captured.format == QStringLiteral("webp")
             ? QStringLiteral("image/webp") : QStringLiteral("image/jpeg");
         attachment.detail = QStringLiteral("original");
+        attachment.size = captured.size;
         requestId = chatController_->sendUserMessageWithScreenshot(
             conversationId_, text, attachment, captured.fingerprint,
             captured.capturedAt, options);
@@ -449,6 +586,7 @@ void MainWindow::onScreenCaptured(const CapturedImage& image)
     attachment.mimeType = image.format == QStringLiteral("webp")
         ? QStringLiteral("image/webp") : QStringLiteral("image/jpeg");
     attachment.detail = QStringLiteral("original");
+    attachment.size = image.size;
     ChatOptions options;
     // DeepSeek 视觉接口当前按普通 JSON 返回；截图请求不走 SSE 流式解析。
     options.stream = false;
@@ -486,6 +624,7 @@ void MainWindow::onCurrentConversationChanged(
     const QVector<ConversationMessage>& messages)
 {
     conversationId_ = conversationId;
+    screenObservation_->setObservationScope(conversationId_);
     screenObservation_->setObservationReady(chatController_ != nullptr
                                              && !conversationId_.isEmpty());
     conversationWindow_->setConversation(conversationId, title, messages);
@@ -494,7 +633,8 @@ void MainWindow::onCurrentConversationChanged(
 void MainWindow::openSettings()
 {
     if (settingsController_ == nullptr) return;
-    SettingsDialog dialog(settingsController_, this, screenObservation_->screenCapture());
+    SettingsDialog dialog(settingsController_, this, screenObservation_->screenCapture(),
+                          captureUiController_);
     dialog.exec();
 }
 
@@ -553,6 +693,14 @@ void MainWindow::closeEvent(QCloseEvent* event)
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event)
 {
+    if (watched == centralWidget()) {
+        if (event->type() == QEvent::MouseButtonPress
+            && resizeController_->handlePress(static_cast<QMouseEvent*>(event))) return true;
+        if (event->type() == QEvent::MouseMove
+            && resizeController_->handleMove(static_cast<QMouseEvent*>(event))) return true;
+        if (event->type() == QEvent::MouseButtonRelease
+            && resizeController_->handleRelease(static_cast<QMouseEvent*>(event))) return true;
+    }
     if ((watched == actionPanel_ || watched == conversationWindow_
          || watched == conversationWindow_->historyWindow())
         && (event->type() == QEvent::Move || event->type() == QEvent::Resize
@@ -564,34 +712,31 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event)
 
 void MainWindow::mousePressEvent(QMouseEvent* event)
 {
-    if (event->button() == Qt::LeftButton) {
-        dragging_ = true;
-        dragOffset_ = event->globalPosition().toPoint() - frameGeometry().topLeft();
-        event->accept();
-        return;
-    }
+    if (resizeController_->handlePress(event)) return;
     QMainWindow::mousePressEvent(event);
 }
 
 void MainWindow::mouseMoveEvent(QMouseEvent* event)
 {
-    if (dragging_ && (event->buttons() & Qt::LeftButton)) {
-        const QPoint desired = event->globalPosition().toPoint() - dragOffset_;
-        QScreen* screen = QGuiApplication::screenAt(event->globalPosition().toPoint());
-        if (screen == nullptr) screen = QGuiApplication::screenAt(frameGeometry().center());
-        if (screen == nullptr) screen = QGuiApplication::primaryScreen();
-        move(screen == nullptr ? desired : WindowPlacement::clamp(
-            screen->availableGeometry(), frameGeometry().size(), desired));
-        event->accept();
-        return;
-    }
+    if (resizeController_->handleMove(event)) return;
     QMainWindow::mouseMoveEvent(event);
 }
 
 void MainWindow::mouseReleaseEvent(QMouseEvent* event)
 {
-    dragging_ = false;
+    if (resizeController_->handleRelease(event)) return;
     QMainWindow::mouseReleaseEvent(event);
+}
+
+void MainWindow::persistInteractiveScale()
+{
+    if (settingsController_ == nullptr
+        || settingsController_->uiConfig().windowScalePercent == uiConfig_.windowScalePercent) {
+        return;
+    }
+    const UiConfig previous = settingsController_->uiConfig();
+    AppError error;
+    if (!settingsController_->updateUiConfig(uiConfig_, &error)) applyUiConfig(previous);
 }
 
 void MainWindow::resizeEvent(QResizeEvent* event)

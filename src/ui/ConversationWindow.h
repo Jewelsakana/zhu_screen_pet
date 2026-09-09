@@ -31,6 +31,7 @@ public:
     void appendAssistantDelta(const QString& delta);
     void finishAssistantReply(const QString& content);
     void setConversationAvatarPath(const QString& path);
+    void setUiScalePercent(int percent);
     /** 隐藏列表持有的全部历史窗口，用于桌宠整体最小化。 */
     void hideAllHistoryWindows();
     ConversationHistoryWindow* historyWindow() const;
@@ -49,6 +50,7 @@ private:
     void showCurrentHistory();
     ConversationHistoryWindow* currentHistoryWindow() const;
     QString selectedConversationId() const;
+    int conversationItemHeight() const;
     void createConversation();
     void archiveConversation();
     void deleteConversation();
@@ -63,6 +65,7 @@ private:
     QListWidget* list_ = nullptr;
     QPointer<ConversationHistoryWindow> historyWindow_;
     QString conversationAvatarPath_;
+    int uiScalePercent_ = 100;
 };
 
 } // namespace zhu_screen_pet

@@ -18,7 +18,6 @@ ScreenObservationCoordinator::ScreenObservationCoordinator(QObject* parent)
 ScreenObservationCoordinator::~ScreenObservationCoordinator()
 {
     capture_->stop();
-    capture_->clearCaptures(nullptr);
 }
 
 void ScreenObservationCoordinator::shutdown()
@@ -26,8 +25,6 @@ void ScreenObservationCoordinator::shutdown()
     if (shutDown_) return;
     shutDown_ = true;
     capture_->stop();
-    QString detail;
-    if (!capture_->clearCaptures(&detail)) report(detail, QStringLiteral("screen.cleanup_shutdown"));
 }
 
 ScreenCapture* ScreenObservationCoordinator::screenCapture() const { return capture_; }
@@ -36,13 +33,15 @@ void ScreenObservationCoordinator::setCaptureDirectory(const QString& directory)
 {
     captureDirectory_ = directory;
     capture_->setCaptureDirectory(directory);
-    QString detail;
-    if (!capture_->clearCaptures(&detail)) report(detail, QStringLiteral("screen.cleanup_startup"));
 }
 
 void ScreenObservationCoordinator::applyConfiguration(const UiConfig& config)
 {
+    const bool restartsAutomaticCapture =
+        (!config_.screenCaptureEnabled || !config_.automaticScreenAnalysisEnabled)
+        && config.screenCaptureEnabled && config.automaticScreenAnalysisEnabled;
     config_ = config.normalized();
+    if (restartsAutomaticCapture) resetFingerprint();
     ImageCompressionOptions compression;
     compression.format = config_.captureImageFormat;
     compression.maxWidth = config_.captureMaxWidth;
@@ -50,6 +49,19 @@ void ScreenObservationCoordinator::applyConfiguration(const UiConfig& config)
     capture_->configure(config_.screenCaptureEnabled, config_.screenCaptureIntervalMs,
                         captureDirectory_, compression);
     updateTimer();
+}
+
+void ScreenObservationCoordinator::setObservationScope(const QString& scopeId)
+{
+    const QString normalized = scopeId.trimmed();
+    if (observationScopeId_ == normalized) return;
+    observationScopeId_ = normalized;
+    resetFingerprint();
+}
+
+void ScreenObservationCoordinator::resetFingerprint()
+{
+    lastSentFingerprint_.clear();
 }
 
 void ScreenObservationCoordinator::setObservationReady(bool ready)
@@ -82,8 +94,6 @@ bool ScreenObservationCoordinator::captureForChat(CapturedImage* image, AppError
 
 void ScreenObservationCoordinator::finishScheduledRequest()
 {
-    discard(activePath_, QStringLiteral("screen.cleanup_request"));
-    activePath_.clear();
     setBusy(false);
 }
 
@@ -92,18 +102,15 @@ void ScreenObservationCoordinator::onCaptured(const CapturedImage& image)
     if (image.trigger == CaptureTrigger::Manual) return;
     if (image.trigger != CaptureTrigger::Scheduled || !config_.screenCaptureEnabled
         || !config_.automaticScreenAnalysisEnabled || !observationReady_ || busy_) {
-        discard(image.filePath, QStringLiteral("screen.cleanup_ignored"));
         updateTimer();
         return;
     }
     if (!lastSentFingerprint_.isEmpty() && !image.fingerprint.isEmpty()
         && !ScreenFingerprint::hasSignificantChange(lastSentFingerprint_, image.fingerprint)) {
-        discard(image.filePath, QStringLiteral("screen.cleanup_duplicate"));
         updateTimer();
         return;
     }
     if (!image.fingerprint.isEmpty()) lastSentFingerprint_ = image.fingerprint;
-    activePath_ = image.filePath;
     setBusy(true);
     emit scheduledImageReady(image);
 }
@@ -113,12 +120,6 @@ void ScreenObservationCoordinator::updateTimer()
     if (!shutDown_ && config_.screenCaptureEnabled && config_.automaticScreenAnalysisEnabled
         && observationReady_ && !busy_) capture_->start();
     else capture_->stop();
-}
-
-void ScreenObservationCoordinator::discard(const QString& path, const QString& operation)
-{
-    QString detail;
-    if (!capture_->removeCapture(path, &detail)) report(detail, operation);
 }
 
 void ScreenObservationCoordinator::report(const QString& detail, const QString& operation)

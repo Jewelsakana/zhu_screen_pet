@@ -23,6 +23,7 @@ public:
     explicit ReplyBubbleWindow(QWidget* parent = nullptr);
 
     void setDisplayDuration(int durationMs);
+    void setUiScalePercent(int percent);
     void beginReply();
     void appendDelta(const QString& delta);
     void finishReply(const QString& completeContent = {});

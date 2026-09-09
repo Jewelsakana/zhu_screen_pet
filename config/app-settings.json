@@ -23,10 +23,12 @@
     "ui": {
         "app_icon_path": "app-icon.png",
         "conversation_avatar_path": "conversation_avatar.png",
+        "main_window_scale_percent": 100,
         "screen_capture_enabled": false,
         "automatic_screen_analysis_enabled": false,
-        "screen_capture_interval_ms": 5000,
+        "screen_capture_interval_ms": 60000,
         "capture_on_chat": false,
+        "exclude_own_windows_from_capture": true,
         "capture_image_format": "jpeg",
         "capture_max_width": 1280,
         "capture_quality": 75,

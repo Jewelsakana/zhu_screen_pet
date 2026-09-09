@@ -28,7 +28,8 @@ void ScreenCapture::configure(bool enabled, int intervalMs, QString captureDirec
                               ImageCompressionOptions options)
 {
     enabled_ = enabled;
-    intervalMs_ = qBound(1000, intervalMs, 600000);
+    intervalMs_ = qBound(ScreenCapturePolicy::MinimumAutomaticIntervalMs, intervalMs,
+                          ScreenCapturePolicy::MaximumAutomaticIntervalMs);
     captureDirectory_ = std::move(captureDirectory);
     options_ = std::move(options);
     if (timer_->isActive()) {

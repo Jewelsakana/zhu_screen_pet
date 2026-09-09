@@ -120,4 +120,31 @@ bool SettingsApplyTransaction::execute(
     return true;
 }
 
+bool SettingsApplyTransaction::executeUi(const PersonaConfig& persona,
+                                         const MemoryLimits& limits,
+                                         const UiConfig& ui, AppError* error)
+{
+    QByteArray oldAppFile;
+    QString technical;
+    if (appRepository_ == nullptr
+        || !appRepository_->snapshot(&oldAppFile, &technical)) {
+        if (error) *error = failure(AppErrorCode::Io,
+                                    QStringLiteral("无法读取旧配置，未进行修改"),
+                                    technical, QStringLiteral("settings.snapshot_ui"));
+        return false;
+    }
+    if (appRepository_->save(persona, limits, &technical, &ui)) return true;
+
+    QString rollbackError;
+    QStringList rollbackErrors;
+    if (!appRepository_->restore(oldAppFile, &rollbackError)) {
+        rollbackErrors.append(QStringLiteral("app file: %1").arg(rollbackError));
+    }
+    if (error) *error = failure(AppErrorCode::Io,
+                                QStringLiteral("界面设置保存失败，已恢复旧配置"),
+                                technical, QStringLiteral("settings.persist_ui"),
+                                rollbackErrors);
+    return false;
+}
+
 } // namespace zhu_screen_pet

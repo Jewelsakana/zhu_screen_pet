@@ -10,6 +10,7 @@
 #include <QClipboard>
 #include <QComboBox>
 #include <QCursor>
+#include <QFontMetrics>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -17,6 +18,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMouseEvent>
+#include <QWheelEvent>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScreen>
@@ -163,282 +165,6 @@ private slots:
         MainWindow window;
         QCOMPARE(window.windowTitle(), QStringLiteral("小珠看着你"));
         QVERIFY(window.centralWidget() != nullptr);
-    }
-
-    void appPathsCreateExpectedDirectories()
-    {
-        QTemporaryDir temporaryDirectory;
-        QVERIFY(temporaryDirectory.isValid());
-
-        AppPaths paths(temporaryDirectory.path() + QStringLiteral("/zhu_screen_pet"));
-        QString errorMessage;
-        QVERIFY2(paths.initialize(&errorMessage), qPrintable(errorMessage));
-        QVERIFY(QFileInfo::exists(paths.configDirectory()));
-        QCOMPARE(paths.modelConfigPath(),
-                 paths.configDirectory() + QStringLiteral("/model-providers.json"));
-        QCOMPARE(paths.appConfigPath(),
-                 paths.configDirectory() + QStringLiteral("/app-settings.json"));
-        QVERIFY(QFileInfo::exists(paths.databaseDirectory()));
-        QVERIFY(QFileInfo::exists(paths.logDirectory()));
-        QVERIFY(QFileInfo::exists(paths.captureDirectory()));
-    }
-
-    void settingsRoundTrip()
-    {
-        QTemporaryDir temporaryDirectory;
-        QVERIFY(temporaryDirectory.isValid());
-
-        const QString settingsPath = QDir(temporaryDirectory.path()).filePath(QStringLiteral("settings.ini"));
-        SettingsRepository settings(settingsPath);
-        settings.setValue(QStringLiteral("capture/interval_seconds"), 30);
-        QString errorMessage;
-        QVERIFY2(settings.save(&errorMessage), qPrintable(errorMessage));
-
-        SettingsRepository loaded(settingsPath);
-        QVERIFY2(loaded.load(&errorMessage), qPrintable(errorMessage));
-        QCOMPARE(loaded.value(QStringLiteral("capture/interval_seconds")).toInt(), 30);
-    }
-
-    void modelConfigurationProfilesRoundTripWithoutSecret()
-    {
-        QTemporaryDir temporaryDirectory;
-        const QString path = QDir(temporaryDirectory.path()).filePath(
-            QStringLiteral("model-providers.json"));
-        const QString shippedPath = QDir(QCoreApplication::applicationDirPath()).filePath(
-            QStringLiteral("config/model-providers.json"));
-        QVERIFY2(QFile::copy(shippedPath, path), qPrintable(shippedPath));
-        ModelConfigRepository repository(path);
-
-        ModelProviderConfig defaults;
-        QVERIFY(repository.loadActive(&defaults));
-        QCOMPARE(defaults.providerType, QStringLiteral("mock"));
-
-        ModelProviderConfig deepSeek;
-        deepSeek.profileId = QStringLiteral("deepseek-chat");
-        deepSeek.providerType = QStringLiteral("deepseek");
-        deepSeek.displayName = QStringLiteral("DeepSeek Chat");
-        deepSeek.baseUrl = QStringLiteral("https://example.invalid/v1");
-        deepSeek.model = QStringLiteral("configured-model");
-        deepSeek.credentialService = QStringLiteral("zhu_screen_pet");
-        deepSeek.credentialAccount = QStringLiteral("deepseek-api-key");
-        deepSeek.timeoutMs = 15000;
-        deepSeek.maxRetries = 2;
-        deepSeek.retryBaseDelayMs = 500;
-        QString errorMessage;
-        QVERIFY2(repository.saveProfile(deepSeek, true, &errorMessage), qPrintable(errorMessage));
-
-        ModelConfigRepository reloaded(path);
-        ModelProviderConfig loaded;
-        QVERIFY2(reloaded.loadActive(&loaded, &errorMessage), qPrintable(errorMessage));
-        QCOMPARE(loaded.profileId, deepSeek.profileId);
-        QCOMPARE(loaded.providerType, deepSeek.providerType);
-        QCOMPARE(loaded.credentialAccount, deepSeek.credentialAccount);
-
-        QFile file(path);
-        QVERIFY(file.open(QIODevice::ReadOnly));
-        const QByteArray serialized = file.readAll();
-        QVERIFY(!serialized.contains("sk-test-secret"));
-        QVERIFY(!serialized.contains("api_key"));
-        QVERIFY(serialized.contains("https://example.invalid/v1"));
-        QVERIFY(serialized.contains("configured-model"));
-    }
-
-    void modelConfigurationDoesNotInventProviderDefaults()
-    {
-        ModelProviderConfig incomplete;
-        incomplete.profileId = QStringLiteral("missing-values");
-        incomplete.providerType = QStringLiteral("deepseek");
-        incomplete.displayName = QStringLiteral("DeepSeek");
-        incomplete.credentialService = QStringLiteral("zhu_screen_pet");
-        incomplete.credentialAccount = QStringLiteral("deepseek-key");
-        incomplete.timeoutMs = 30000;
-        incomplete.maxRetries = 3;
-        incomplete.retryBaseDelayMs = 1000;
-        QString errorMessage;
-        QVERIFY(!incomplete.validate(&errorMessage));
-        QVERIFY(errorMessage.contains(QStringLiteral("URL")));
-        QVERIFY(incomplete.normalized().baseUrl.isEmpty());
-        QVERIFY(incomplete.normalized().model.isEmpty());
-    }
-
-    void modelConfigurationLimitsAutomaticRetries()
-    {
-        ModelProviderConfig config;
-        config.profileId = QStringLiteral("retry-limits");
-        config.providerType = QStringLiteral("mock");
-        config.displayName = QStringLiteral("Retry Limits");
-        config.mockReply = QStringLiteral("ok");
-        config.timeoutMs = ModelProviderConfig::MaximumTimeoutMs;
-        config.maxRetries = ModelProviderConfig::MaximumRetries;
-        config.retryBaseDelayMs = ModelProviderConfig::MaximumRetryBaseDelayMs;
-        QVERIFY(config.validate());
-
-        QString errorMessage;
-        config.maxRetries = ModelProviderConfig::MaximumRetries + 1;
-        QVERIFY(!config.validate(&errorMessage));
-        QVERIFY(errorMessage.contains(QStringLiteral("retries 0..5")));
-    }
-
-    void modelErrorsHaveFriendlyUserMessages()
-    {
-        QHash<QString, QString> messages;
-        testPersona(&messages);
-        const ModelErrorPresenter presenter(messages);
-        QCOMPARE(presenter.message(
-                     {ModelErrorCode::Authentication, QStringLiteral("secret missing"), 401}),
-                 messages.value(QStringLiteral("authentication")));
-        QCOMPARE(presenter.message(
-                     {ModelErrorCode::Timeout, QStringLiteral("socket timeout"), 0}),
-                 messages.value(QStringLiteral("timeout")));
-        QCOMPARE(presenter.message(
-                     {ModelErrorCode::RateLimit, QStringLiteral("too many requests"), 429}),
-                 messages.value(QStringLiteral("rate_limit")));
-        QCOMPARE(presenter.message(
-                     {ModelErrorCode::Network, QStringLiteral("connection refused"), 0}),
-                 messages.value(QStringLiteral("network")));
-    }
-
-    void personaConfigControlsReplyLengthAndProactivity()
-    {
-        PersonaConfig config = testPersona();
-        config.name = QStringLiteral("小猫");
-        config.tone = QStringLiteral("温柔");
-        config.maxReplyTokens = 1234;
-        config.proactiveLevel = 3;
-        QString errorMessage;
-        QVERIFY(config.validate(&errorMessage));
-        QCOMPARE(config.normalized().maxReplyTokens, 1234);
-        QVERIFY(config.systemInstruction().contains(QStringLiteral("小猫")));
-        QVERIFY(config.systemInstruction().contains(config.userAddress));
-        QVERIFY(config.systemInstruction().contains(QStringLiteral("积极发现")));
-        QVERIFY(config.proactivityInstruction().contains(QStringLiteral("主动")));
-        config.proactiveLevel = 4;
-        QVERIFY(!config.validate(&errorMessage));
-    }
-
-    void applicationConfigDefaultsMissingUserAddress()
-    {
-        QTemporaryDir directory;
-        QVERIFY(directory.isValid());
-        const QString path = directory.filePath(QStringLiteral("app-settings.json"));
-        const QString shippedPath = QDir(QCoreApplication::applicationDirPath()).filePath(
-            QStringLiteral("config/app-settings.json"));
-        QVERIFY(QFile::copy(shippedPath, path));
-
-        QFile file(path);
-        QVERIFY(file.open(QIODevice::ReadOnly));
-        QJsonDocument document = QJsonDocument::fromJson(file.readAll());
-        file.close();
-        QVERIFY(document.isObject());
-        QJsonObject root = document.object();
-        QJsonObject personaObject = root.value(QStringLiteral("persona")).toObject();
-        personaObject.remove(QStringLiteral("user_address"));
-        root.insert(QStringLiteral("persona"), personaObject);
-        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
-        QVERIFY(file.write(QJsonDocument(root).toJson()) > 0);
-        file.close();
-
-        PersonaConfig persona;
-        QHash<QString, QString> messages;
-        QString errorMessage;
-        AppConfigRepository repository(path);
-        QVERIFY2(repository.load(&persona, &messages, &errorMessage), qPrintable(errorMessage));
-        QCOMPARE(persona.userAddress, QStringLiteral("主人大人"));
-        QVERIFY(persona.systemInstruction().contains(QStringLiteral("主人大人")));
-    }
-
-    void applicationConfigLoadsMemoryLimits()
-    {
-        const MemoryLimits limits = testMemoryLimits();
-        QCOMPARE(limits.recentMessageLimit, 20);
-        QCOMPARE(limits.relevantHistoryLimit, 5);
-        QCOMPARE(limits.longTermMemoryLimit, 5);
-        QCOMPARE(limits.maxContextTokens, 8000);
-
-        PersonaConfig persona;
-        QHash<QString, QString> messages;
-        UiConfig ui;
-        const QString path = QDir(QCoreApplication::applicationDirPath()).filePath(
-            QStringLiteral("config/app-settings.json"));
-        AppConfigRepository repository(path);
-        QVERIFY(repository.load(&persona, &messages, nullptr, nullptr, &ui));
-        QCOMPARE(ui.replyBubbleDurationMs, 15000);
-        QCOMPARE(ui.hoverHideDelayMs, 600);
-        QCOMPARE(ui.fadeDurationMs, 180);
-        QVERIFY(ui.appIconPath.isEmpty());
-        QVERIFY(ui.petAvatarPath.isEmpty());
-        QVERIFY(ui.conversationAvatarPath.isEmpty());
-        QVERIFY(!ui.screenCaptureEnabled);
-        QCOMPARE(ui.screenCaptureIntervalMs, 5000);
-        QVERIFY(!ui.captureOnChat);
-        QCOMPARE(ui.captureImageFormat, QStringLiteral("jpeg"));
-        QCOMPARE(ui.captureMaxWidth, 1280);
-        QCOMPARE(ui.captureQuality, 75);
-    }
-
-    void imageCompressorScalesAndEncodesJpeg()
-    {
-        QImage source(2400, 1200, QImage::Format_RGB32);
-        source.fill(Qt::blue);
-        ImageCompressionOptions options;
-        options.format = QStringLiteral("jpeg");
-        options.maxWidth = 800;
-        options.quality = 80;
-        QByteArray data;
-        QString format;
-        QSize outputSize;
-        QString error;
-        QVERIFY2(ImageCompressor::compress(source, options, &data, &format,
-                                           &outputSize, &error), qPrintable(error));
-        QVERIFY(!data.isEmpty());
-        QCOMPARE(format, QStringLiteral("jpeg"));
-        QCOMPARE(outputSize, QSize(800, 400));
-        QImage decoded;
-        QVERIFY(decoded.loadFromData(data, "JPEG"));
-        QCOMPARE(decoded.size(), outputSize);
-    }
-
-    void applicationConfigPersistsAssetPaths()
-    {
-        QTemporaryDir directory;
-        QVERIFY(directory.isValid());
-        const QString path = directory.filePath(QStringLiteral("app-settings.json"));
-        const QString shippedPath = QDir(QCoreApplication::applicationDirPath()).filePath(
-            QStringLiteral("config/app-settings.json"));
-        QVERIFY(QFile::copy(shippedPath, path));
-
-        AppConfigRepository repository(path);
-        PersonaConfig persona;
-        QHash<QString, QString> messages;
-        MemoryLimits limits;
-        UiConfig ui;
-        QString errorMessage;
-        QVERIFY2(repository.load(&persona, &messages, &errorMessage, &limits, &ui),
-                 qPrintable(errorMessage));
-        ui.appIconPath = QStringLiteral("assets/app-icon.png");
-        ui.petAvatarPath = QStringLiteral("assets/pet-avatar.png");
-        ui.conversationAvatarPath = QStringLiteral("assets/history-avatar.png");
-        ui.screenCaptureEnabled = true;
-        ui.screenCaptureIntervalMs = 7000;
-        ui.captureOnChat = true;
-        ui.captureImageFormat = QStringLiteral("webp");
-        ui.captureMaxWidth = 1024;
-        ui.captureQuality = 68;
-        QVERIFY2(repository.save(persona, limits, &errorMessage, &ui),
-                 qPrintable(errorMessage));
-
-        UiConfig reloadedUi;
-        QVERIFY2(repository.load(&persona, &messages, &errorMessage, &limits, &reloadedUi),
-                 qPrintable(errorMessage));
-        QCOMPARE(reloadedUi.appIconPath, QStringLiteral("assets/app-icon.png"));
-        QCOMPARE(reloadedUi.petAvatarPath, QStringLiteral("assets/pet-avatar.png"));
-        QCOMPARE(reloadedUi.conversationAvatarPath, QStringLiteral("assets/history-avatar.png"));
-        QVERIFY(reloadedUi.screenCaptureEnabled);
-        QCOMPARE(reloadedUi.screenCaptureIntervalMs, 7000);
-        QVERIFY(reloadedUi.captureOnChat);
-        QCOMPARE(reloadedUi.captureImageFormat, QStringLiteral("webp"));
-        QCOMPARE(reloadedUi.captureMaxWidth, 1024);
-        QCOMPARE(reloadedUi.captureQuality, 68);
     }
 
     void databaseInitializesSchema()
@@ -693,406 +419,6 @@ private slots:
         QVERIFY(!errorMessage.isEmpty());
     }
 
-    void windowManagerReportsSettingsSaveFailure()
-    {
-        QTemporaryDir directory;
-        QVERIFY(directory.isValid());
-        const QString blockingFile = directory.filePath(QStringLiteral("blocking"));
-        QFile file(blockingFile);
-        QVERIFY(file.open(QIODevice::WriteOnly));
-        file.close();
-        SettingsRepository settings(blockingFile + QStringLiteral("/settings.ini"));
-        WindowManager manager(&settings);
-        QWidget window;
-        QString errorMessage;
-        QVERIFY(!manager.save(&window, &errorMessage));
-        QVERIFY(!errorMessage.isEmpty());
-    }
-
-    void windowPositionIsClampedToAvailableGeometry()
-    {
-        const QRect available(0, 0, 1920, 1080);
-        const QPoint position = WindowManager::clampPosition(
-            available, QSize(420, 240), QPoint(1800, 1000));
-        QCOMPARE(position, QPoint(1500, 840));
-    }
-
-    void windowPlacementUsesPreferredSideAndFlipsAtScreenEdge()
-    {
-        WindowPlacementRequest request;
-        request.availableGeometry = QRect(0, 0, 1000, 800);
-        request.anchorGeometry = QRect(400, 300, 200, 200);
-        request.windowSize = QSize(100, 80);
-        request.preferredSide = AttachmentSide::Right;
-        request.alignment = AttachmentAlignment::Center;
-        request.gap = 12;
-        WindowPlacementResult result = WindowPlacement::adjacent(request);
-        QCOMPARE(result.position, QPoint(612, 359));
-        QCOMPARE(result.actualSide, AttachmentSide::Right);
-        QVERIFY(!result.flipped);
-
-        request.anchorGeometry = QRect(900, 300, 90, 200);
-        result = WindowPlacement::adjacent(request);
-        QCOMPARE(result.position, QPoint(788, 359));
-        QCOMPARE(result.actualSide, AttachmentSide::Left);
-        QVERIFY(result.flipped);
-    }
-
-    void horizontalWindowChainFlipsAsOneUnit()
-    {
-        HorizontalWindowChainRequest request;
-        request.availableGeometry = QRect(0, 0, 1600, 900);
-        request.anchorGeometry = QRect(180, 380, 100, 50);
-        request.windowSizes = {QSize(320, 500), QSize(620, 600)};
-        request.preferredSide = AttachmentSide::Right;
-        request.gap = 12;
-        HorizontalWindowChainResult result = WindowPlacement::horizontalChain(request);
-        QCOMPARE(result.actualSide, AttachmentSide::Right);
-        QCOMPARE(result.positions.size(), 2);
-        QVERIFY(result.positions.at(0).x() > request.anchorGeometry.right());
-        QVERIFY(result.positions.at(1).x() > result.positions.at(0).x() + 320);
-
-        request.anchorGeometry = QRect(1320, 380, 100, 50);
-        result = WindowPlacement::horizontalChain(request);
-        QCOMPARE(result.actualSide, AttachmentSide::Left);
-        QVERIFY(result.flipped);
-        QVERIFY(result.positions.at(0).x() + 320 < request.anchorGeometry.left());
-        QVERIFY(result.positions.at(1).x() + 620 < result.positions.at(0).x());
-    }
-
-    void horizontalWindowChainKeepsSpacingWhenNeitherSideFits()
-    {
-        HorizontalWindowChainRequest request;
-        request.availableGeometry = QRect(0, 0, 1000, 800);
-        request.anchorGeometry = QRect(450, 350, 100, 100);
-        request.windowSizes = {QSize(300, 400), QSize(300, 500)};
-        request.preferredSide = AttachmentSide::Right;
-        request.gap = 10;
-        const HorizontalWindowChainResult result = WindowPlacement::horizontalChain(request);
-        QCOMPARE(result.positions.size(), 2);
-        const QRect first(result.positions.at(0), request.windowSizes.at(0));
-        const QRect second(result.positions.at(1), request.windowSizes.at(1));
-        QVERIFY(request.availableGeometry.contains(first));
-        QVERIFY(request.availableGeometry.contains(second));
-        QVERIFY(!first.intersects(second));
-        QCOMPARE(qAbs(second.left() - first.right()) - 1, request.gap);
-    }
-
-    void windowManagerPersistsNamedWindowsIndependently()
-    {
-        QTemporaryDir directory;
-        QVERIFY(directory.isValid());
-        SettingsRepository settings(directory.filePath(QStringLiteral("settings.ini")));
-        QVERIFY(settings.load());
-        WindowManager manager(&settings);
-        QWidget pet;
-        QWidget conversation;
-        pet.resize(100, 100);
-        conversation.resize(100, 100);
-        pet.move(120, 140);
-        conversation.move(360, 280);
-        QVERIFY(manager.save(&pet, QStringLiteral("pet")));
-        QVERIFY(manager.save(&conversation, QStringLiteral("conversation")));
-        pet.move(0, 0);
-        conversation.move(0, 0);
-        manager.restore(&pet, QStringLiteral("pet"));
-        manager.restore(&conversation, QStringLiteral("conversation"));
-        QCOMPARE(pet.pos(), QPoint(120, 140));
-        QCOMPARE(conversation.pos(), QPoint(360, 280));
-    }
-
-    void attachedWindowFollowsAnchorMovement()
-    {
-        QWidget anchor;
-        QWidget bubble;
-        anchor.resize(200, 200);
-        bubble.resize(100, 80);
-        anchor.move(300, 240);
-        anchor.show();
-        bubble.show();
-        QTest::qWait(20);
-        WindowAttachmentManager manager;
-        manager.setAnchor(&anchor);
-        manager.attach(&bubble, {AttachmentSide::Left, AttachmentAlignment::Center, 10});
-        const QPoint initial = bubble.pos();
-        anchor.move(340, 270);
-        QTRY_COMPARE_WITH_TIMEOUT(bubble.pos() - initial, QPoint(40, 30), 1000);
-    }
-
-    void desktopWindowPolicyAppliesTransparentOverlayFlags()
-    {
-        QWidget overlay;
-        DesktopWindowOptions options;
-        options.frameless = true;
-        options.translucentBackground = true;
-        options.alwaysOnTop = true;
-        options.showInTaskbar = false;
-        options.acceptFocus = false;
-        options.mouseInputTransparent = true;
-        QString error;
-        QVERIFY2(DesktopWindowPolicy::apply(&overlay, options, &error), qPrintable(error));
-        QVERIFY(overlay.windowFlags().testFlag(Qt::FramelessWindowHint));
-        QVERIFY(overlay.windowFlags().testFlag(Qt::WindowStaysOnTopHint));
-        QCOMPARE(overlay.windowType(), Qt::Tool);
-        QVERIFY(overlay.testAttribute(Qt::WA_TranslucentBackground));
-        QVERIFY(overlay.testAttribute(Qt::WA_ShowWithoutActivating));
-        QVERIFY(overlay.testAttribute(Qt::WA_TransparentForMouseEvents));
-#ifdef Q_OS_WIN
-        if (QGuiApplication::platformName() == QStringLiteral("windows")) {
-            DWORD affinity = WDA_NONE;
-            QVERIFY(GetWindowDisplayAffinity(
-                reinterpret_cast<HWND>(overlay.winId()), &affinity));
-            QVERIFY(affinity == WDA_EXCLUDEFROMCAPTURE || affinity == WDA_MONITOR);
-        }
-#endif
-        QVERIFY(DesktopWindowPolicy::setMouseInputTransparent(&overlay, false, &error));
-        QVERIFY(!overlay.testAttribute(Qt::WA_TransparentForMouseEvents));
-    }
-
-    void hoverRevealControllerDelaysHidingAndHonorsGuard()
-    {
-        QWidget panel;
-        QWidget hotZone;
-        panel.resize(180, 80);
-        hotZone.resize(20, 80);
-        // 远离测试运行器的默认鼠标坐标，避免全局轮询主动触发显示。
-        panel.move(5000, 5000);
-        hotZone.move(5200, 5000);
-        HoverRevealController controller;
-        controller.setTimings(100, 0);
-        bool allowHide = false;
-        controller.setCanHidePredicate([&allowHide]() { return allowHide; });
-        controller.bind(&panel, &hotZone);
-        QVERIFY(!panel.isVisible());
-        QVERIFY(!hotZone.isVisible());
-
-        controller.setActive(false);
-        QVERIFY(!controller.isActive());
-        QVERIFY(!panel.isVisible());
-        QVERIFY(!hotZone.isVisible());
-        controller.setActive(true);
-        QVERIFY(controller.isActive());
-        QVERIFY(!hotZone.isVisible());
-
-        QEvent enter(QEvent::Enter);
-        QApplication::sendEvent(&hotZone, &enter);
-        QVERIFY(controller.isRevealed());
-        QVERIFY(panel.isVisible());
-        QCOMPARE(panel.graphicsEffect(), nullptr);
-        QTRY_COMPARE_WITH_TIMEOUT(panel.windowOpacity(), 1.0, 500);
-        QVERIFY(!hotZone.isVisible());
-
-        QEvent leaveBlocked(QEvent::Leave);
-        QApplication::sendEvent(&panel, &leaveBlocked);
-        QTest::qWait(140);
-        QVERIFY(controller.isRevealed());
-        QVERIFY(panel.isVisible());
-
-        allowHide = true;
-        QEvent leaveAllowed(QEvent::Leave);
-        QApplication::sendEvent(&panel, &leaveAllowed);
-        QTRY_VERIFY_WITH_TIMEOUT(!controller.isRevealed(), 500);
-        QVERIFY(!panel.isVisible());
-        QVERIFY(!hotZone.isVisible());
-    }
-
-    void hoverRevealControllerPollsInvisibleActivationRegion()
-    {
-        QWidget panel;
-        QWidget hotZone;
-        panel.resize(180, 80);
-        hotZone.resize(44, 120);
-        panel.move(5000, 5000);
-        // 不移动真实鼠标，而是把隐藏感应区放到当前鼠标位置验证轮询回退路径。
-        hotZone.move(QCursor::pos() - QPoint(22, 60));
-        HoverRevealController controller;
-        controller.setTimings(100, 0);
-        controller.bind(&panel, &hotZone);
-        QVERIFY(!hotZone.isVisible());
-        QTRY_VERIFY_WITH_TIMEOUT(controller.isRevealed(), 500);
-        QVERIFY(panel.isVisible());
-        controller.setActive(false);
-        QVERIFY(!panel.isVisible());
-    }
-
-    void replyBubbleMaintainsOneStreamAndStartsTimerAfterFinish()
-    {
-        ReplyBubbleWindow bubble;
-        bubble.setDisplayDuration(1200);
-        bubble.beginReply();
-        bubble.appendDelta(QStringLiteral("前半"));
-        bubble.appendDelta(QStringLiteral("后半"));
-        QCOMPARE(bubble.content(), QStringLiteral("前半后半"));
-        QVERIFY(bubble.isVisible());
-        QVERIFY(!bubble.dismissalTimerActive());
-
-        bubble.finishReply();
-        QVERIFY(bubble.dismissalTimerActive());
-        QEvent enter(QEvent::Enter);
-        QApplication::sendEvent(&bubble, &enter);
-        QVERIFY(!bubble.dismissalTimerActive());
-        QEvent leave(QEvent::Leave);
-        QApplication::sendEvent(&bubble, &leave);
-        QVERIFY(bubble.dismissalTimerActive());
-
-        bubble.beginReply();
-        bubble.appendDelta(QStringLiteral("新回复"));
-        QCOMPARE(bubble.content(), QStringLiteral("新回复"));
-        QVERIFY(!bubble.dismissalTimerActive());
-        auto* content = bubble.findChild<QTextBrowser*>(QStringLiteral("replyBubbleContent"));
-        QVERIFY(content != nullptr);
-        QTest::mouseClick(content->viewport(), Qt::LeftButton);
-        QVERIFY(bubble.isVisible());
-        QVERIFY(bubble.findChild<QPushButton*>(QStringLiteral("replyBubbleExpand")) == nullptr);
-        QVERIFY(bubble.styleSheet().contains(QStringLiteral("background:transparent")));
-        QVERIFY(bubble.styleSheet().contains(QStringLiteral("border-radius:24px")));
-        auto* tail = bubble.findChild<QWidget*>(QStringLiteral("replyBubbleTail"));
-        QVERIFY(tail != nullptr);
-        QCOMPARE(tail->property("pointsRight").toBool(), true);
-        bubble.setAttachmentSide(AttachmentSide::Right);
-        QCOMPARE(tail->property("pointsRight").toBool(), false);
-        bubble.finishReply();
-        auto* close = bubble.findChild<QPushButton*>(QStringLiteral("replyBubbleClose"));
-        QVERIFY(close != nullptr);
-        close->click();
-        QVERIFY(!bubble.isVisible());
-    }
-
-    void errorBannerPersistsAndReplacesOnlyUserMessage()
-    {
-        ErrorBannerWindow banner;
-        banner.showError(QStringLiteral("网络好像断开了，请稍后重试。"), true);
-        QVERIFY(banner.isVisible());
-        QVERIFY(banner.hasActiveError());
-        QCOMPARE(banner.message(), QStringLiteral("网络好像断开了，请稍后重试。"));
-        QTest::qWait(120);
-        QVERIFY(banner.isVisible());
-
-        banner.showError(QStringLiteral("我还没有拿到模型密钥，请先到设置里配置一下。"), false);
-        QCOMPARE(banner.message(), QStringLiteral("我还没有拿到模型密钥，请先到设置里配置一下。"));
-        banner.hide();
-        QVERIFY(banner.hasActiveError());
-        banner.restoreIfActive();
-        QVERIFY(banner.isVisible());
-        auto* close = banner.findChild<QPushButton*>(QStringLiteral("errorBannerClose"));
-        QVERIFY(close != nullptr);
-        close->click();
-        QVERIFY(!banner.isVisible());
-        QVERIFY(!banner.hasActiveError());
-    }
-
-    void mainWindowBuildsTransparentShellAndMinimizesAllWindows()
-    {
-        MainWindow window;
-        QVERIFY(window.windowFlags().testFlag(Qt::FramelessWindowHint));
-        QVERIFY(window.windowFlags().testFlag(Qt::WindowStaysOnTopHint));
-        QCOMPARE(window.windowType(), Qt::Window);
-        QVERIFY(window.testAttribute(Qt::WA_TranslucentBackground));
-        QVERIFY(window.findChild<ActionPanel*>(QStringLiteral("actionPanel")) != nullptr);
-        QVERIFY(window.findChild<ChatInputPanel*>(QStringLiteral("chatInputPanel")) != nullptr);
-        QVERIFY(window.findChild<ReplyBubbleWindow*>(QStringLiteral("replyBubble")) != nullptr);
-        QVERIFY(window.findChild<ErrorBannerWindow*>(QStringLiteral("errorBanner")) != nullptr);
-        auto* conversations = window.conversationWindow();
-        QVERIFY(conversations != nullptr);
-
-        window.showPetShell();
-        QVERIFY(window.isVisible());
-        QVERIFY(!window.findChild<ReplyBubbleWindow*>(QStringLiteral("replyBubble"))->isVisible());
-        QVERIFY(!window.findChild<ErrorBannerWindow*>(QStringLiteral("errorBanner"))->isVisible());
-        QVERIFY(!conversations->isVisible());
-
-        auto* openConversations = window.findChild<QPushButton*>(
-            QStringLiteral("conversationManagerButton"));
-        QVERIFY(openConversations != nullptr);
-        openConversations->click();
-        QVERIFY(conversations->isVisible());
-
-        auto* minimize = window.findChild<QPushButton*>(QStringLiteral("petMinimizeButton"));
-        QVERIFY(minimize != nullptr);
-        minimize->click();
-        QVERIFY(!window.isVisible());
-        QVERIFY(!window.findChild<ActionPanel*>(QStringLiteral("actionPanel"))->isVisible());
-        QVERIFY(!window.findChild<ChatInputPanel*>(QStringLiteral("chatInputPanel"))->isVisible());
-        QVERIFY(!window.findChild<ReplyBubbleWindow*>(QStringLiteral("replyBubble"))->isVisible());
-        QVERIFY(!window.findChild<ErrorBannerWindow*>(QStringLiteral("errorBanner"))->isVisible());
-        QVERIFY(!conversations->isVisible());
-    }
-
-    void mainWindowDragIsClampedToAvailableScreen()
-    {
-        MainWindow window;
-        window.show();
-        QTest::qWait(20);
-        QScreen* screen = QGuiApplication::primaryScreen();
-        QVERIFY(screen != nullptr);
-        const QRect available = screen->availableGeometry();
-        window.move(available.center() - QPoint(window.width() / 2, window.height() / 2));
-        const QPoint localPress = window.rect().center();
-        QTest::mousePress(&window, Qt::LeftButton, Qt::NoModifier, localPress);
-        const QPoint targetGlobal = available.topLeft() - QPoint(1000, 1000);
-        QMouseEvent moveEvent(QEvent::MouseMove, QPointF(-1000, -1000),
-                              QPointF(targetGlobal), Qt::NoButton, Qt::LeftButton,
-                              Qt::NoModifier);
-        QApplication::sendEvent(&window, &moveEvent);
-        QTest::mouseRelease(&window, Qt::LeftButton, Qt::NoModifier, QPoint(0, 0));
-        QVERIFY(available.contains(window.frameGeometry()));
-    }
-
-    void mainWindowCloseEntrypointsRequestApplicationExit()
-    {
-        MainWindow window;
-        QSignalSpy exitSpy(&window, &MainWindow::applicationExitRequested);
-
-        window.showPetShell();
-        QVERIFY(window.close());
-        QCOMPARE(exitSpy.count(), 1);
-        QVERIFY(!window.isVisible());
-
-        window.showPetShell();
-        auto* closeButton = window.findChild<QPushButton*>(QStringLiteral("petCloseButton"));
-        QVERIFY(closeButton != nullptr);
-        closeButton->click();
-        QCOMPARE(exitSpy.count(), 2);
-    }
-
-    void floatingControlsUseTransparentBasesAndOpaqueRoundedControls()
-    {
-        MainWindow window;
-        auto* actions = window.findChild<ActionPanel*>(QStringLiteral("actionPanel"));
-        auto* input = window.findChild<ChatInputPanel*>(QStringLiteral("chatInputPanel"));
-        auto* bubble = window.findChild<ReplyBubbleWindow*>(QStringLiteral("replyBubble"));
-        auto* error = window.findChild<ErrorBannerWindow*>(QStringLiteral("errorBanner"));
-        QVERIFY(actions != nullptr && input != nullptr && bubble != nullptr && error != nullptr);
-        QVERIFY(actions->testAttribute(Qt::WA_TranslucentBackground));
-        QVERIFY(input->testAttribute(Qt::WA_TranslucentBackground));
-        QVERIFY(actions->styleSheet().contains(QStringLiteral("background:transparent")));
-        QVERIFY(input->styleSheet().contains(QStringLiteral("background:transparent")));
-        QVERIFY(actions->styleSheet().contains(QStringLiteral("border-radius:16px")));
-        QVERIFY(input->styleSheet().contains(QStringLiteral("border-radius:17px")));
-        for (QPushButton* button : actions->findChildren<QPushButton*>()) {
-            QVERIFY(button->minimumHeight() >= 38);
-        }
-        auto* editor = input->findChild<QTextEdit*>(QStringLiteral("chatInput"));
-        QVERIFY(editor != nullptr);
-        QVERIFY(input->styleSheet().contains(QStringLiteral("background:#fffdf8")));
-
-        QVERIFY(bubble->testAttribute(Qt::WA_TranslucentBackground));
-        QVERIFY(bubble->styleSheet().contains(QStringLiteral("background:transparent")));
-        QVERIFY(bubble->styleSheet().contains(QStringLiteral("#fffaf0")));
-        QVERIFY(!error->testAttribute(Qt::WA_TranslucentBackground));
-        QVERIFY(error->styleSheet().contains(QStringLiteral("#fffaf0")));
-
-        SettingsDialog settings(nullptr);
-        QVERIFY(!settings.testAttribute(Qt::WA_TranslucentBackground));
-        QVERIFY(settings.styleSheet().contains(QStringLiteral("#fffaf0")));
-        auto* capturePrivacyHelp = settings.findChild<QPushButton*>(
-            QStringLiteral("settingsCapturePrivacyHelp"));
-        QVERIFY(capturePrivacyHelp != nullptr);
-        QCOMPARE(capturePrivacyHelp->text(), QStringLiteral("?"));
-        QCOMPARE(capturePrivacyHelp->accessibleName(),
-                 QStringLiteral("查看屏幕截图隐私提醒"));
-    }
-
     void mainWindowRunsStreamingChatAndShowsReplyBubble()
     {
         QTemporaryDir temporaryDirectory;
@@ -1128,7 +454,7 @@ private slots:
         QVERIFY(!window.conversationWindow()->isVisible());
     }
 
-    void mainWindowSendsCapturedImageAndDeletesItAfterReply()
+    void mainWindowSendsMemoryOnlyCapturedImage()
     {
         QTemporaryDir temporaryDirectory;
         QVERIFY(temporaryDirectory.isValid());
@@ -1148,7 +474,7 @@ private slots:
         ScreenCapture* capture = window.findChild<ScreenCapture*>();
         QVERIFY(capture != nullptr);
         ImageCompressionOptions compression;
-        capture->configure(true, 5000, temporaryDirectory.path(), compression);
+        capture->configure(true, 30000, temporaryDirectory.path(), compression);
         auto* observation = window.findChild<ScreenObservationCoordinator*>();
         QVERIFY(observation != nullptr);
         UiConfig captureConfig;
@@ -1156,23 +482,19 @@ private slots:
         captureConfig.automaticScreenAnalysisEnabled = true;
         observation->applyConfiguration(captureConfig);
 
-        const QString screenshotPath = temporaryDirectory.filePath(
-            QStringLiteral("capture_test.jpeg"));
-        QFile screenshot(screenshotPath);
-        QVERIFY(screenshot.open(QIODevice::WriteOnly));
-        QVERIFY(screenshot.write("compressed-image") > 0);
-        screenshot.close();
         CapturedImage image;
         image.data = QByteArrayLiteral("compressed-image");
         image.fingerprint = QByteArrayLiteral("ui-fingerprint");
         image.capturedAt = QDateTime::currentDateTimeUtc();
         image.format = QStringLiteral("jpeg");
-        image.filePath = screenshotPath;
         image.trigger = CaptureTrigger::Scheduled;
         emit capture->captured(image);
 
         QTRY_COMPARE_WITH_TIMEOUT(provider.requestCount(), 1, 1000);
-        QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(screenshotPath), 1000);
+        QTRY_COMPARE_WITH_TIMEOUT(controller.pendingRequestCount(), 0, 1000);
+        QVERIFY(image.filePath.isEmpty());
+        QVERIFY(QDir(temporaryDirectory.path()).entryList(
+            {QStringLiteral("capture_*")}, QDir::Files).isEmpty());
         const QVector<ConversationMessage> history = conversations.recentMessages(conversationId, 10);
         QVERIFY(history.isEmpty());
         const auto latest = observations.latestValidResult(
@@ -1205,7 +527,7 @@ private slots:
         ScreenCapture* capture = window.findChild<ScreenCapture*>();
         QVERIFY(capture != nullptr);
         ImageCompressionOptions compression;
-        capture->configure(true, 5000, temporaryDirectory.path(), compression);
+        capture->configure(true, 30000, temporaryDirectory.path(), compression);
         auto* observation = window.findChild<ScreenObservationCoordinator*>();
         QVERIFY(observation != nullptr);
         UiConfig captureConfig;
@@ -1216,34 +538,28 @@ private slots:
         constexpr int fingerprintBytes =
             (ScreenFingerprint::Width * ScreenFingerprint::Height + 7) / 8;
         const QByteArray baseline(fingerprintBytes, '\0');
-        const auto makeCapture = [&](const QString& name, const QByteArray& fingerprint) {
+        const auto makeCapture = [&](const QString&, const QByteArray& fingerprint) {
             CapturedImage image;
             image.data = QByteArrayLiteral("compressed-image");
             image.fingerprint = fingerprint;
             image.capturedAt = QDateTime::currentDateTimeUtc();
             image.format = QStringLiteral("jpeg");
-            image.filePath = temporaryDirectory.filePath(name);
             image.trigger = CaptureTrigger::Scheduled;
-            QFile file(image.filePath);
-            if (!file.open(QIODevice::WriteOnly) || file.write(image.data) != image.data.size()) {
-                image.filePath.clear();
-            }
             return image;
         };
 
         const CapturedImage first = makeCapture(QStringLiteral("capture_dedup_first.jpeg"), baseline);
-        QVERIFY(!first.filePath.isEmpty());
+        QVERIFY(first.filePath.isEmpty());
         emit capture->captured(first);
         QCOMPARE(provider.requestCount(), 1);
         provider.finish(ChatResult::success(QStringLiteral("首次分析")));
-        QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(first.filePath), 1000);
+        QTRY_COMPARE_WITH_TIMEOUT(controller.pendingRequestCount(), 0, 1000);
 
         const CapturedImage unchanged = makeCapture(
             QStringLiteral("capture_dedup_unchanged.jpeg"), baseline);
-        QVERIFY(!unchanged.filePath.isEmpty());
+        QVERIFY(unchanged.filePath.isEmpty());
         emit capture->captured(unchanged);
         QCOMPARE(provider.requestCount(), 1);
-        QVERIFY(!QFileInfo::exists(unchanged.filePath));
         QVERIFY(conversations.recentMessages(conversationId, 10).isEmpty());
 
         QByteArray changed = baseline;
@@ -1258,6 +574,7 @@ private slots:
         QCOMPARE(provider.requestCount(), 2);
         provider.finish(ChatResult::failure(
             {ModelErrorCode::Network, QStringLiteral("network failure"), 0}));
+        QTRY_COMPARE_WITH_TIMEOUT(controller.pendingRequestCount(), 0, 1000);
         QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(failed.filePath), 1000);
 
         const CapturedImage sameAfterFailure = makeCapture(
@@ -1286,7 +603,7 @@ private slots:
         ScreenCapture* capture = window.findChild<ScreenCapture*>();
         QVERIFY(capture != nullptr);
         ImageCompressionOptions compression;
-        capture->configure(true, 5000, temporaryDirectory.path(), compression);
+        capture->configure(true, 30000, temporaryDirectory.path(), compression);
         auto* observation = window.findChild<ScreenObservationCoordinator*>();
         QVERIFY(observation != nullptr);
         UiConfig captureConfig;
@@ -1299,32 +616,25 @@ private slots:
             image.fingerprint = QByteArrayLiteral("blocking-fingerprint-") + name.toUtf8();
             image.capturedAt = QDateTime::currentDateTimeUtc();
             image.format = QStringLiteral("jpeg");
-            image.filePath = temporaryDirectory.filePath(name);
             image.trigger = CaptureTrigger::Scheduled;
-            QFile file(image.filePath);
-            if (!file.open(QIODevice::WriteOnly) || file.write(image.data) != image.data.size()) {
-                image.filePath.clear();
-            }
             return image;
         };
 
         const CapturedImage first = makeCapture(QStringLiteral("capture_first.jpeg"));
-        QVERIFY(!first.filePath.isEmpty());
+        QVERIFY(first.filePath.isEmpty());
         emit capture->captured(first);
         QCOMPARE(provider.requestCount(), 1);
-        QVERIFY(QFileInfo::exists(first.filePath));
 
         const CapturedImage blocked = makeCapture(QStringLiteral("capture_blocked.jpeg"));
-        QVERIFY(!blocked.filePath.isEmpty());
+        QVERIFY(blocked.filePath.isEmpty());
         emit capture->captured(blocked);
         QCOMPARE(provider.requestCount(), 1);
-        QVERIFY(!QFileInfo::exists(blocked.filePath));
 
         provider.finish(ChatResult::success(QStringLiteral("第一次分析完成")));
-        QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(first.filePath), 1000);
+        QTRY_COMPARE_WITH_TIMEOUT(controller.pendingRequestCount(), 0, 1000);
 
         const CapturedImage failed = makeCapture(QStringLiteral("capture_failed.jpeg"));
-        QVERIFY(!failed.filePath.isEmpty());
+        QVERIFY(failed.filePath.isEmpty());
         emit capture->captured(failed);
         QCOMPARE(provider.requestCount(), 2);
         AppError failure;
@@ -1332,7 +642,7 @@ private slots:
         failure.message = QStringLiteral("network failure");
         failure.retryable = true;
         provider.finish(ChatResult::failure(failure));
-        QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(failed.filePath), 1000);
+        QTRY_COMPARE_WITH_TIMEOUT(controller.pendingRequestCount(), 0, 1000);
         QTRY_COMPARE_WITH_TIMEOUT(controller.pendingRequestCount(), 0, 1000);
         QVERIFY(controller.retryLast().isEmpty());
     }
@@ -1701,237 +1011,6 @@ private slots:
         QVERIFY(archived.value().isArchived());
     }
 
-    void settingsControllerAppliesAndPersistsRuntimeConfiguration()
-    {
-        QTemporaryDir directory;
-        QVERIFY(directory.isValid());
-        const QString modelPath = directory.filePath(QStringLiteral("models.json"));
-        const QString appPath = directory.filePath(QStringLiteral("app.json"));
-        QVERIFY(QFile::copy(QDir(QCoreApplication::applicationDirPath()).filePath(
-            QStringLiteral("config/model-providers.json")), modelPath));
-        QVERIFY(QFile::copy(QDir(QCoreApplication::applicationDirPath()).filePath(
-            QStringLiteral("config/app-settings.json")), appPath));
-        ModelConfigRepository models(modelPath);
-        AppConfigRepository app(appPath);
-        Database database;
-        QVERIFY(database.open(directory.filePath(QStringLiteral("chat.sqlite"))));
-        SqliteConversationRepository conversations(&database);
-        MemoryOrchestrator memory(&conversations);
-        HttpClient http;
-        SecretStore secrets;
-        ChatProviderFactory factory(&http, &secrets);
-        ProviderManager providers(&factory);
-        ModelProviderConfig initial;
-        QVERIFY2(models.loadActive(&initial), "active model should load");
-        QString error;
-        QVERIFY2(providers.switchProvider(initial, &error), qPrintable(error));
-        ChatController chat(&providers, &memory);
-        PersonaConfig persona;
-        QHash<QString, QString> messages;
-        MemoryLimits limits;
-        QVERIFY2(app.load(&persona, &messages, &error, &limits), qPrintable(error));
-        QVERIFY(chat.setPersonaConfig(persona));
-        ErrorCenter errors;
-        SettingsController settings(&models, &app, &factory, &providers, &chat,
-                                     &memory, &secrets, &errors);
-        ModelProviderConfig changed = initial;
-        changed.displayName = QStringLiteral("Mock 已应用");
-        changed.profileId = QStringLiteral("settings-test");
-        changed.providerType = QStringLiteral("mock");
-        changed.mockReply = QStringLiteral("测试回复");
-        changed.baseUrl.clear(); changed.model.clear();
-        changed.credentialService.clear(); changed.credentialAccount.clear();
-        PersonaConfig changedPersona = persona;
-        changedPersona.name = QStringLiteral("设置后的桌宠");
-        MemoryLimits changedLimits = limits;
-        changedLimits.recentMessageLimit = limits.recentMessageLimit + 1;
-        AppError applyError;
-        QVERIFY2(settings.apply(changed, changedPersona, changedLimits, {}, &applyError),
-                 qPrintable(applyError.technicalMessage));
-        QCOMPARE(providers.activeConfiguration().profileId, QStringLiteral("settings-test"));
-        QCOMPARE(chat.personaConfig().name, QStringLiteral("设置后的桌宠"));
-        QCOMPARE(memory.limits().recentMessageLimit, changedLimits.recentMessageLimit);
-        ModelProviderConfig persisted;
-        QVERIFY2(models.loadActive(&persisted, &error), qPrintable(error));
-        QCOMPARE(persisted.profileId, QStringLiteral("settings-test"));
-        PersonaConfig persistedPersona;
-        QHash<QString, QString> persistedMessages;
-        MemoryLimits persistedLimits;
-        QVERIFY2(app.load(&persistedPersona, &persistedMessages, &error, &persistedLimits), qPrintable(error));
-        QCOMPARE(persistedPersona.name, QStringLiteral("设置后的桌宠"));
-        QCOMPARE(persistedLimits.recentMessageLimit, changedLimits.recentMessageLimit);
-        QCOMPARE(persistedMessages, messages);
-        SettingsDialog dialog(&settings);
-        auto* profileList = dialog.findChild<QComboBox*>(QStringLiteral("settingsModelProfile"));
-        auto* modelUrl = dialog.findChild<QLineEdit*>(QStringLiteral("settingsModelUrl"));
-        auto* applyButton = dialog.findChild<QPushButton*>(QStringLiteral("settingsApplyButton"));
-        QVERIFY(profileList != nullptr && modelUrl != nullptr && applyButton != nullptr);
-        auto* personaGroup = dialog.findChild<QGroupBox*>(QStringLiteral("settingsPersonaGroup"));
-        auto* userAddress = dialog.findChild<QLineEdit*>(QStringLiteral("settingsUserAddress"));
-        QVERIFY(personaGroup != nullptr && userAddress != nullptr);
-        QStringList personaLabels;
-        for (const QLabel* label : personaGroup->findChildren<QLabel*>()) {
-            personaLabels.append(label->text());
-        }
-        QVERIFY(!personaLabels.contains(QStringLiteral("名称")));
-        QVERIFY(!personaLabels.contains(QStringLiteral("语气")));
-        QVERIFY(personaLabels.contains(QStringLiteral("对你的称呼")));
-        auto* relevantLimit = dialog.findChild<QSpinBox*>(
-            QStringLiteral("settingsRelevantHistoryLimit"));
-        auto* longTermLimit = dialog.findChild<QSpinBox*>(
-            QStringLiteral("settingsLongTermMemoryLimit"));
-        auto* contextLimit = dialog.findChild<QSpinBox*>(
-            QStringLiteral("settingsContextTokenLimit"));
-        QVERIFY(relevantLimit != nullptr && longTermLimit != nullptr && contextLimit != nullptr);
-        QCOMPARE(relevantLimit->maximum(), MemoryLimits::MaximumRetrievedItems);
-        QCOMPARE(longTermLimit->maximum(), MemoryLimits::MaximumRetrievedItems);
-        QCOMPARE(contextLimit->maximum(), MemoryLimits::MaximumContextTokens);
-        QCOMPARE(profileList->currentData().toString(), QStringLiteral("settings-test"));
-        QCOMPARE(profileList->currentText(), QStringLiteral("Mock 已应用"));
-        const QString hiddenPersonaName = chat.personaConfig().name;
-        const QString hiddenPersonaTone = chat.personaConfig().tone;
-        userAddress->setText(QStringLiteral("指挥官"));
-        dialog.show();
-        QTest::mouseClick(applyButton, Qt::LeftButton);
-        QCOMPARE(dialog.result(), static_cast<int>(QDialog::Accepted));
-        QCOMPARE(chat.personaConfig().name, hiddenPersonaName);
-        QCOMPARE(chat.personaConfig().tone, hiddenPersonaTone);
-        QCOMPARE(chat.personaConfig().userAddress, QStringLiteral("指挥官"));
-        QVERIFY(chat.personaConfig().systemInstruction().contains(QStringLiteral("指挥官")));
-        QVERIFY2(app.load(&persistedPersona, &persistedMessages, &error, &persistedLimits),
-                 qPrintable(error));
-        QCOMPARE(persistedPersona.name, hiddenPersonaName);
-        QCOMPARE(persistedPersona.tone, hiddenPersonaTone);
-        QCOMPARE(persistedPersona.userAddress, QStringLiteral("指挥官"));
-    }
-
-    void settingsControllerTestsCandidateWithoutSwitchingProvider()
-    {
-        QTemporaryDir directory;
-        QVERIFY(directory.isValid());
-        const QString modelPath = directory.filePath(QStringLiteral("models.json"));
-        const QString appPath = directory.filePath(QStringLiteral("app.json"));
-        QVERIFY(QFile::copy(QDir(QCoreApplication::applicationDirPath()).filePath(
-            QStringLiteral("config/model-providers.json")), modelPath));
-        QVERIFY(QFile::copy(QDir(QCoreApplication::applicationDirPath()).filePath(
-            QStringLiteral("config/app-settings.json")), appPath));
-        ModelConfigRepository models(modelPath);
-        AppConfigRepository app(appPath);
-        Database database;
-        QVERIFY(database.open(directory.filePath(QStringLiteral("chat.sqlite"))));
-        SqliteConversationRepository conversations(&database);
-        MemoryOrchestrator memory(&conversations);
-        HttpClient http;
-        SecretStore secrets;
-        ChatProviderFactory factory(&http, &secrets);
-        ProviderManager providers(&factory);
-        ModelProviderConfig initial;
-        QVERIFY(models.loadActive(&initial));
-        QVERIFY(providers.switchProvider(initial));
-        ChatController chat(&providers, &memory);
-        PersonaConfig persona;
-        QHash<QString, QString> messages;
-        MemoryLimits limits;
-        QVERIFY(app.load(&persona, &messages, nullptr, &limits));
-        QVERIFY(chat.setPersonaConfig(persona));
-        ErrorCenter errors;
-        SettingsController settings(&models, &app, &factory, &providers, &chat,
-                                     &memory, &secrets, &errors);
-        QSignalSpy spy(&settings, &SettingsController::connectionTestFinished);
-        ModelProviderConfig candidate = initial;
-        candidate.displayName = QStringLiteral("尚未应用的候选模型");
-        candidate.mockReply = QStringLiteral("pong");
-        QVERIFY(settings.testConnection(candidate, {}));
-        QVERIFY(spy.wait(1000));
-        QVERIFY(spy.first().at(0).toBool());
-        QCOMPARE(providers.activeConfiguration().displayName, initial.displayName);
-        const QString conversationId = conversations.createConversation(QStringLiteral("忙碌检查"));
-        QSignalSpy failedSpy(&chat, &ChatController::requestFailed);
-        QVERIFY(!chat.sendMessage(conversationId, QStringLiteral("尚未完成")).isEmpty());
-        AppError busyError;
-        QVERIFY(!settings.apply(initial, persona, limits, {}, &busyError));
-        QCOMPARE(busyError.code, AppErrorCode::Busy);
-        settings.cancelActiveChat();
-        QVERIFY(failedSpy.wait(1000));
-
-        ModelProviderConfig remote;
-        remote.profileId = QStringLiteral("remote-without-key");
-        remote.providerType = QStringLiteral("openai-compatible");
-        remote.displayName = QStringLiteral("Remote Without Key");
-        remote.baseUrl = QStringLiteral("https://example.invalid/v1");
-        remote.model = QStringLiteral("test-model");
-        remote.credentialService = QStringLiteral("zhu_screen_pet");
-        remote.credentialAccount = QStringLiteral("missing-key-%1")
-            .arg(QUuid::createUuid().toString(QUuid::Id128));
-        remote.timeoutMs = 1000;
-        remote.maxRetries = 0;
-        remote.retryBaseDelayMs = 50;
-        AppError secretError;
-        QVERIFY(!settings.apply(remote, persona, limits, {}, &secretError));
-        QCOMPARE(secretError.code, AppErrorCode::ConfigInvalid);
-        QCOMPARE(secretError.operation, QStringLiteral("settings.validate_secret"));
-        QCOMPARE(providers.activeConfiguration().profileId, initial.profileId);
-    }
-
-    void settingsControllerRollsBackWhenSecondConfigCannotBeSaved()
-    {
-#ifdef Q_OS_WIN
-        QTemporaryDir directory;
-        QVERIFY(directory.isValid());
-        const QString modelPath = directory.filePath(QStringLiteral("models.json"));
-        const QString appPath = directory.filePath(QStringLiteral("app.json"));
-        QVERIFY(QFile::copy(QDir(QCoreApplication::applicationDirPath()).filePath(
-            QStringLiteral("config/model-providers.json")), modelPath));
-        QVERIFY(QFile::copy(QDir(QCoreApplication::applicationDirPath()).filePath(
-            QStringLiteral("config/app-settings.json")), appPath));
-        ModelConfigRepository models(modelPath);
-        AppConfigRepository app(appPath);
-        Database database;
-        QVERIFY(database.open(directory.filePath(QStringLiteral("chat.sqlite"))));
-        SqliteConversationRepository conversations(&database);
-        MemoryOrchestrator memory(&conversations);
-        HttpClient http;
-        SecretStore secrets;
-        ChatProviderFactory factory(&http, &secrets);
-        ProviderManager providers(&factory);
-        ModelProviderConfig initial;
-        QVERIFY(models.loadActive(&initial));
-        QVERIFY(providers.switchProvider(initial));
-        ChatController chat(&providers, &memory);
-        PersonaConfig persona;
-        QHash<QString, QString> messages;
-        MemoryLimits limits;
-        QVERIFY(app.load(&persona, &messages, nullptr, &limits));
-        QVERIFY(chat.setPersonaConfig(persona));
-        ErrorCenter errors;
-        SettingsController settings(&models, &app, &factory, &providers, &chat,
-                                     &memory, &secrets, &errors);
-        QByteArray modelBefore;
-        QByteArray appBefore;
-        QVERIFY(models.snapshot(&modelBefore));
-        QVERIFY(app.snapshot(&appBefore));
-        const HANDLE lock = CreateFileW(
-            reinterpret_cast<LPCWSTR>(appPath.utf16()), GENERIC_READ,
-            FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-        QVERIFY(lock != INVALID_HANDLE_VALUE);
-        ModelProviderConfig changed = initial;
-        changed.profileId = QStringLiteral("must-be-rolled-back");
-        changed.displayName = QStringLiteral("不应保留");
-        AppError applyError;
-        QVERIFY(!settings.apply(changed, persona, limits, {}, &applyError));
-        CloseHandle(lock);
-        QCOMPARE(applyError.code, AppErrorCode::Io);
-        QCOMPARE(providers.activeConfiguration().profileId, initial.profileId);
-        QByteArray modelAfter;
-        QByteArray appAfter;
-        QVERIFY(models.snapshot(&modelAfter));
-        QVERIFY(app.snapshot(&appAfter));
-        QCOMPARE(modelAfter, modelBefore);
-        QCOMPARE(appAfter, appBefore);
-#else
-        QSKIP("Windows file sharing is used to make the second save fail deterministically");
-#endif
-    }
 };
 
 } // namespace zhu_screen_pet

@@ -353,6 +353,30 @@ private slots:
         QVERIFY(errorMessage.contains(QStringLiteral("exceeds")));
     }
 
+    void imageTokensAreReservedFromContextBudget()
+    {
+        QCOMPARE(MemoryOrchestrator::estimateImageTokens(QSize(512, 512),
+                                                          QStringLiteral("low")), 85);
+        QCOMPARE(MemoryOrchestrator::estimateImageTokens(QSize(1024, 1024)), 765);
+
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        Database database;
+        QVERIFY(database.open(temporaryDirectory.filePath(QStringLiteral("image-budget.sqlite"))));
+        SqliteConversationRepository conversations(&database);
+        const QString id = conversations.createConversation(QStringLiteral("图片预算"));
+        MemoryOrchestrator orchestrator(&conversations);
+        ContextRequest request;
+        request.conversationId = id;
+        request.currentInput = QStringLiteral("看图");
+        request.maxTokens = 700;
+        request.reservedInputTokens = MemoryOrchestrator::estimateImageTokens(QSize(1024, 1024));
+        QString error;
+        const MemoryContext context = orchestrator.buildContext(request, &error);
+        QVERIFY(context.messages.empty());
+        QVERIFY(error.contains(QStringLiteral("exceeds")));
+    }
+
     void chatControllerCompletesAndPersistsReply()
     {
         QTemporaryDir temporaryDirectory;

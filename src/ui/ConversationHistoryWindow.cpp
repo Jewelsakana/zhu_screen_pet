@@ -1,6 +1,8 @@
 #include "ui/ConversationHistoryWindow.h"
 
 #include <QGuiApplication>
+#include <QApplication>
+#include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPixmap>
@@ -11,9 +13,11 @@
 #include <QSizePolicy>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <QtMath>
 
 #include "infrastructure/DesktopWindowPolicy.h"
 #include "infrastructure/WindowPlacement.h"
+#include "ui/UiScaleMetrics.h"
 
 namespace zhu_screen_pet {
 
@@ -77,6 +81,7 @@ ConversationHistoryWindow::ConversationHistoryWindow(QWidget* parent)
     root->addWidget(scrollArea_, 1);
 
     connect(close, &QPushButton::clicked, this, &QWidget::hide);
+    setUiScalePercent(100);
     // 只能由会话列表主动打开，不能随父级窗口首次显示。
     hide();
 }
@@ -114,6 +119,79 @@ QString ConversationHistoryWindow::conversationId() const
 void ConversationHistoryWindow::setPetAvatarPath(const QString& path)
 {
     petAvatarPath_ = path.trimmed();
+}
+
+void ConversationHistoryWindow::setUiScalePercent(int percent)
+{
+    uiScalePercent_ = percent;
+    const UiScaleMetrics metrics(percent);
+    const int frameRadius = metrics.scaled(24, 10);
+    const int contentRadius = metrics.scaled(16, 7);
+    const int buttonRadius = metrics.scaled(10, 6);
+    const int buttonPaddingY = metrics.scaled(7, 5);
+    const int buttonPaddingX = metrics.scaled(12, 8);
+    setStyleSheet(QStringLiteral(
+        "QWidget#conversationHistoryWindow{background:#fffaf0;border:1px solid #b8c9e8;"
+        "border-radius:%1px;}"
+        "QLabel#conversationHistoryTitle{color:#26375d;font-weight:600;}"
+        "QScrollArea{background:#fffaf0;border:none;border-radius:%2px;}"
+        "QWidget#historyMessageContainer{background:#fffaf0;border-radius:%2px;}"
+        "QPushButton{background:#e5efff;color:#36558f;border:none;border-radius:%3px;"
+        "padding:%4px %5px;}"
+        "QPushButton:hover{background:#ccdeff;}")
+        .arg(frameRadius).arg(contentRadius).arg(buttonRadius)
+        .arg(buttonPaddingY).arg(buttonPaddingX));
+    if (auto* root = qobject_cast<QVBoxLayout*>(layout())) {
+        root->setContentsMargins(metrics.scaled(18), metrics.scaled(14),
+                                 metrics.scaled(18), metrics.scaled(18));
+        root->setSpacing(metrics.scaled(6, 4));
+    }
+    messageLayout_->setContentsMargins(metrics.scaled(16), metrics.scaled(18),
+                                        metrics.scaled(16), metrics.scaled(18));
+    messageLayout_->setSpacing(metrics.scaled(16, 6));
+    const QFont readableFont = metrics.readableFont(QApplication::font());
+    QFont titleFont = readableFont;
+    titleFont.setBold(true);
+    titleFont.setPointSizeF(qMax(readableFont.pointSizeF(),
+                                 11.0 * qMax(metrics.factor(), 0.75)));
+    title_->setFont(titleFont);
+    const int textHeight = QFontMetrics(readableFont).height();
+    for (QPushButton* button : findChildren<QPushButton*>()) {
+        button->setFont(readableFont);
+        button->setMinimumWidth(0);
+        button->setMinimumHeight(qMax(metrics.scaled(32),
+                                      textHeight + buttonPaddingY * 2 + 2));
+        button->setMinimumWidth(button->sizeHint().width());
+    }
+    const int avatarSize = metrics.scaled(38, 24);
+    for (QLabel* avatar : findChildren<QLabel*>(QStringLiteral("petAvatar"))) {
+        avatar->setFixedSize(avatarSize, avatarSize);
+        avatar->setFont(readableFont);
+        const QPixmap pixmap(petAvatarPath_);
+        if (!pixmap.isNull()) {
+            avatar->setPixmap(pixmap.scaled(avatarSize, avatarSize, Qt::KeepAspectRatio,
+                                             Qt::SmoothTransformation));
+        }
+    }
+    for (QWidget* row : findChildren<QWidget*>(QStringLiteral("historyMessageRow"))) {
+        if (auto* rowLayout = qobject_cast<QHBoxLayout*>(row->layout())) {
+            rowLayout->setSpacing(metrics.scaled(10, 5));
+        }
+    }
+    for (const QString& name : {QStringLiteral("assistantMessageBubble"),
+                                QStringLiteral("userMessageBubble"),
+                                QStringLiteral("systemMessageBubble")}) {
+        for (QLabel* bubble : findChildren<QLabel*>(name)) {
+            bubble->setFont(readableFont);
+            applyMessageBubbleStyle(bubble);
+        }
+    }
+    const QSize desiredMinimum = metrics.scaledForWindow(this, QSize(460, 390));
+    const QSize desiredSize = metrics.scaledForWindow(this, QSize(620, 540));
+    setMinimumSize(QSize(0, 0));
+    const QSize contentMinimum = minimumSizeHint();
+    setMinimumSize(desiredMinimum.expandedTo(contentMinimum));
+    resize(desiredSize.expandedTo(minimumSize()));
 }
 
 void ConversationHistoryWindow::setConversation(
@@ -172,46 +250,71 @@ QLabel* ConversationHistoryWindow::addMessageBubble(MessageRole role, const QStr
     bubble->setTextFormat(Qt::PlainText);
     bubble->setWordWrap(true);
     bubble->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    bubble->setMaximumWidth(520);
+    const UiScaleMetrics metrics(uiScalePercent_);
+    const int avatarSize = metrics.scaled(38, 24);
+    const QFont readableFont = metrics.readableFont(QApplication::font());
+    bubble->setFont(readableFont);
     bubble->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
 
     if (role == MessageRole::Assistant) {
         auto* avatar = new QLabel(row);
         avatar->setObjectName(QStringLiteral("petAvatar"));
         avatar->setAlignment(Qt::AlignCenter);
-        avatar->setFixedSize(38, 38);
+        avatar->setFixedSize(avatarSize, avatarSize);
+        avatar->setFont(readableFont);
         avatar->setStyleSheet(QStringLiteral(
-            "background:#6ea8f7;color:white;border-radius:19px;font-weight:600;"));
+            "background:#6ea8f7;color:white;border-radius:%1px;font-weight:600;")
+            .arg(avatarSize / 2));
         const QPixmap pixmap(petAvatarPath_);
         if (!pixmap.isNull()) {
-            avatar->setPixmap(pixmap.scaled(38, 38, Qt::KeepAspectRatio,
+            avatar->setPixmap(pixmap.scaled(avatarSize, avatarSize, Qt::KeepAspectRatio,
                                              Qt::SmoothTransformation));
-            avatar->setStyleSheet(QStringLiteral("background:transparent;border-radius:19px;"));
+            avatar->setStyleSheet(QStringLiteral("background:transparent;border-radius:%1px;")
+                                  .arg(avatarSize / 2));
         } else {
             avatar->setText(QStringLiteral("宠"));
         }
         bubble->setObjectName(QStringLiteral("assistantMessageBubble"));
-        bubble->setStyleSheet(QStringLiteral(
-            "background:#79adf3;color:#172d52;border-radius:15px;padding:10px 13px;"));
         layout->addWidget(avatar, 0, Qt::AlignTop);
         layout->addWidget(bubble, 0, Qt::AlignTop);
         layout->addStretch();
     } else if (role == MessageRole::User) {
         bubble->setObjectName(QStringLiteral("userMessageBubble"));
-        bubble->setStyleSheet(QStringLiteral(
-            "background:#a88cf5;color:#24184f;border-radius:15px;padding:10px 13px;"));
         layout->addStretch();
         layout->addWidget(bubble, 0, Qt::AlignTop);
     } else {
         bubble->setObjectName(QStringLiteral("systemMessageBubble"));
-        bubble->setStyleSheet(QStringLiteral(
-            "background:#eef2f8;color:#667085;border-radius:12px;padding:8px 12px;"));
         layout->addStretch();
         layout->addWidget(bubble, 0, Qt::AlignTop);
         layout->addStretch();
     }
+    applyMessageBubbleStyle(bubble);
     messageLayout_->addWidget(row);
     return bubble;
+}
+
+void ConversationHistoryWindow::applyMessageBubbleStyle(QLabel* bubble) const
+{
+    if (bubble == nullptr) return;
+    const UiScaleMetrics metrics(uiScalePercent_);
+    const int maximumWidth = metrics.scaled(520, 180);
+    bubble->setMaximumWidth(maximumWidth);
+    if (bubble->objectName() == QStringLiteral("assistantMessageBubble")) {
+        bubble->setStyleSheet(QStringLiteral(
+            "background:#79adf3;color:#172d52;border-radius:%1px;padding:%2px %3px;")
+            .arg(metrics.scaled(15, 7)).arg(metrics.scaled(10, 6))
+            .arg(metrics.scaled(13, 8)));
+    } else if (bubble->objectName() == QStringLiteral("userMessageBubble")) {
+        bubble->setStyleSheet(QStringLiteral(
+            "background:#a88cf5;color:#24184f;border-radius:%1px;padding:%2px %3px;")
+            .arg(metrics.scaled(15, 7)).arg(metrics.scaled(10, 6))
+            .arg(metrics.scaled(13, 8)));
+    } else {
+        bubble->setStyleSheet(QStringLiteral(
+            "background:#eef2f8;color:#667085;border-radius:%1px;padding:%2px %3px;")
+            .arg(metrics.scaled(12, 6)).arg(metrics.scaled(8, 5))
+            .arg(metrics.scaled(12, 8)));
+    }
 }
 
 void ConversationHistoryWindow::clearMessages()

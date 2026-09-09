@@ -4,8 +4,10 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QVBoxLayout>
+#include <QtMath>
 
 #include "infrastructure/DesktopWindowPolicy.h"
+#include "ui/UiScaleMetrics.h"
 
 namespace zhu_screen_pet {
 
@@ -41,6 +43,13 @@ ErrorBannerWindow::ErrorBannerWindow(QWidget* parent)
     connect(close, &QPushButton::clicked, this, &ErrorBannerWindow::dismiss);
     // 没有活动错误时保持显式隐藏，避免父窗口首次 show() 将空横幅带出。
     hide();
+}
+
+void ErrorBannerWindow::setUiScalePercent(int percent)
+{
+    const UiScaleMetrics metrics(percent);
+    setFixedWidth(metrics.scaled(380));
+    adjustSize();
 }
 
 void ErrorBannerWindow::showError(const QString& userMessage, bool retryable)

@@ -14,6 +14,7 @@ class ErrorBannerWindow final : public QWidget
 
 public:
     explicit ErrorBannerWindow(QWidget* parent = nullptr);
+    void setUiScalePercent(int percent);
     void showError(const QString& userMessage, bool retryable);
     /** 用户确认或开始重试时清除当前错误；普通 hide() 只用于暂时隐藏窗口。 */
     void dismiss();

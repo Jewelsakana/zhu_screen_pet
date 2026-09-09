@@ -30,6 +30,9 @@ public:
     bool summarizeIfNeeded(const QString& conversationId, QString* errorMessage = nullptr);
 
     static int estimateTokens(const QString& text);
+    /** 按常见 OpenAI 兼容视觉输入的 512px 分块规则估算图片 token。 */
+    static int estimateImageTokens(const QSize& size,
+                                   const QString& detail = QStringLiteral("original"));
 
 private:
     ConversationRepository* conversations_ = nullptr;

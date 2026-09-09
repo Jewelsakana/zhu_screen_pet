@@ -1,4 +1,6 @@
 #include "ui/SettingsDialog.h"
+#include "ui/CaptureUiController.h"
+#include "ui/UiScaleMetrics.h"
 
 #include <QComboBox>
 #include <QCheckBox>
@@ -12,8 +14,10 @@
 #include <QPushButton>
 #include <QScreen>
 #include <QScrollArea>
+#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 
 #include "app/SettingsController.h"
 #include "infrastructure/DesktopWindowPolicy.h"
@@ -24,26 +28,55 @@
 namespace zhu_screen_pet {
 
 namespace {
+class NoWheelSpinBox final : public QSpinBox
+{
+public:
+    using QSpinBox::QSpinBox;
+
+protected:
+    void wheelEvent(QWheelEvent* event) override { event->ignore(); }
+};
+
+class NoWheelComboBox final : public QComboBox
+{
+public:
+    using QComboBox::QComboBox;
+
+protected:
+    void wheelEvent(QWheelEvent* event) override { event->ignore(); }
+};
+
 QSpinBox* spin(QWidget* parent, int min, int max)
 {
-    auto* result = new QSpinBox(parent);
+    auto* result = new NoWheelSpinBox(parent);
     result->setRange(min, max);
     return result;
 }
+
+QComboBox* combo(QWidget* parent)
+{
+    return new NoWheelComboBox(parent);
+}
+
 }
 
 SettingsDialog::SettingsDialog(SettingsController* controller, QWidget* parent,
-                               ScreenCapture* screenCapture)
-    : QDialog(parent), controller_(controller), screenCapture_(screenCapture)
+                               ScreenCapture* screenCapture,
+                               CaptureUiController* captureUiController)
+    : QDialog(parent), controller_(controller), screenCapture_(screenCapture),
+      captureUiController_(captureUiController)
 {
     setWindowTitle(QStringLiteral("设置"));
     setObjectName(QStringLiteral("settingsDialog"));
-    DesktopWindowPolicy::setExcludedFromCapture(this, true);
+    if (captureUiController_ != nullptr) captureUiController_->registerWindow(this);
     const QRect available = QGuiApplication::primaryScreen()
         ? QGuiApplication::primaryScreen()->availableGeometry()
         : QRect(0, 0, 1920, 1080);
-    resize(WindowPlacement::scaleForScreen(QSize(480, 660), available));
-    setMinimumSize(WindowPlacement::scaleForScreen(QSize(360, 420), available));
+    const int initialScale = controller_ == nullptr
+        ? 100 : controller_->uiConfig().windowScalePercent;
+    const UiScaleMetrics metrics(initialScale);
+    resize(metrics.scaledForScreen(QSize(480, 660), available));
+    setMinimumSize(metrics.scaledForScreen(QSize(360, 420), available));
     setStyleSheet(QStringLiteral(
         "QDialog#settingsDialog{background:#fffaf0;color:#26375d;}"
         "QScrollArea{background:transparent;border:none;}"
@@ -66,9 +99,9 @@ SettingsDialog::SettingsDialog(SettingsController* controller, QWidget* parent,
     contentLayout->setSpacing(8);
     auto* modelBox = new QGroupBox(QStringLiteral("模型"), content);
     auto* modelForm = new QFormLayout(modelBox);
-    profile_ = new QComboBox(modelBox);
+    profile_ = combo(modelBox);
     profile_->setObjectName(QStringLiteral("settingsModelProfile"));
-    providerType_ = new QComboBox(modelBox);
+    providerType_ = combo(modelBox);
     providerType_->addItems({QStringLiteral("mock"), QStringLiteral("openai-compatible"),
                              QStringLiteral("deepseek")});
     profileId_ = new QLineEdit(modelBox);
@@ -133,7 +166,13 @@ SettingsDialog::SettingsDialog(SettingsController* controller, QWidget* parent,
     auto* uiForm = new QFormLayout(uiBox);
     bubbleDurationSeconds_ = spin(uiBox, 1, 300);
     bubbleDurationSeconds_->setSuffix(QStringLiteral(" 秒"));
+    windowScalePercent_ = spin(uiBox, UiConfig::MinimumWindowScalePercent,
+                               UiConfig::MaximumWindowScalePercent);
+    windowScalePercent_->setSingleStep(5);
+    windowScalePercent_->setSuffix(QStringLiteral("%"));
+    windowScalePercent_->setObjectName(QStringLiteral("settingsMainWindowScale"));
     uiForm->addRow(QStringLiteral("回复气泡显示时间"), bubbleDurationSeconds_);
+    uiForm->addRow(QStringLiteral("主窗口及附属窗口缩放"), windowScalePercent_);
 
     auto* captureBox = new QGroupBox(QStringLiteral("屏幕截图"), content);
     auto* captureForm = new QFormLayout(captureBox);
@@ -156,13 +195,36 @@ SettingsDialog::SettingsDialog(SettingsController* controller, QWidget* parent,
         QStringLiteral("定时截图并自动发送给模型（可能产生费用）"), captureBox);
     automaticScreenAnalysisEnabled_->setObjectName(
         QStringLiteral("settingsAutomaticScreenAnalysisEnabled"));
-    screenCaptureIntervalSeconds_ = spin(captureBox, 1, 600);
+    auto* automaticCaptureRow = new QWidget(captureBox);
+    auto* automaticCaptureLayout = new QHBoxLayout(automaticCaptureRow);
+    automaticCaptureLayout->setContentsMargins(0, 0, 0, 0);
+    automaticCaptureLayout->setSpacing(6);
+    auto* automaticCaptureHelp = new QPushButton(QStringLiteral("?"), automaticCaptureRow);
+    automaticCaptureHelp->setObjectName(QStringLiteral("settingsAutomaticCaptureHelp"));
+    automaticCaptureHelp->setAccessibleName(QStringLiteral("查看定时截图费用提醒"));
+    automaticCaptureHelp->setToolTip(QStringLiteral(
+        "如果截图间隔太短，可能会产生大量的费用且占据更多的对话上下文，"
+        "推荐将截图间隔至少在60s以上。"));
+    automaticCaptureHelp->setFixedSize(24, 24);
+    automaticCaptureLayout->addWidget(automaticScreenAnalysisEnabled_);
+    automaticCaptureLayout->addWidget(automaticCaptureHelp);
+    automaticCaptureLayout->addStretch();
+    screenCaptureIntervalSeconds_ = spin(
+        captureBox, UiConfig::MinimumScreenCaptureIntervalMs / 1000,
+        UiConfig::MaximumScreenCaptureIntervalMs / 1000);
     screenCaptureIntervalSeconds_->setSuffix(QStringLiteral(" 秒"));
     screenCaptureIntervalSeconds_->setObjectName(QStringLiteral("settingsScreenCaptureInterval"));
     captureOnChat_ = new QCheckBox(
         QStringLiteral("随本次用户消息附带截图（不额外发起请求）"), captureBox);
     captureOnChat_->setObjectName(QStringLiteral("settingsCaptureOnChat"));
-    captureImageFormat_ = new QComboBox(captureBox);
+    includeOwnWindowsInCapture_ = new QCheckBox(
+        QStringLiteral("允许桌宠及其窗口出现在截图中"), captureBox);
+    includeOwnWindowsInCapture_->setObjectName(
+        QStringLiteral("settingsIncludeOwnWindowsInCapture"));
+    captureExclusionStatus_ = new QLabel(captureBox);
+    captureExclusionStatus_->setObjectName(QStringLiteral("settingsCaptureExclusionStatus"));
+    captureExclusionStatus_->setWordWrap(true);
+    captureImageFormat_ = combo(captureBox);
     captureImageFormat_->addItem(QStringLiteral("JPEG"), QStringLiteral("jpeg"));
     captureImageFormat_->addItem(QStringLiteral("WebP（不可用时回退 JPEG）"), QStringLiteral("webp"));
     captureImageFormat_->setObjectName(QStringLiteral("settingsCaptureImageFormat"));
@@ -173,9 +235,11 @@ SettingsDialog::SettingsDialog(SettingsController* controller, QWidget* parent,
     captureQuality_->setSuffix(QStringLiteral("%"));
     captureQuality_->setObjectName(QStringLiteral("settingsCaptureQuality"));
     captureForm->addRow(capturePermissionRow);
-    captureForm->addRow(automaticScreenAnalysisEnabled_);
+    captureForm->addRow(automaticCaptureRow);
     captureForm->addRow(QStringLiteral("自动截图间隔"), screenCaptureIntervalSeconds_);
     captureForm->addRow(captureOnChat_);
+    captureForm->addRow(includeOwnWindowsInCapture_);
+    captureForm->addRow(QStringLiteral("自身窗口保护状态"), captureExclusionStatus_);
     captureForm->addRow(QStringLiteral("图像格式"), captureImageFormat_);
     captureForm->addRow(QStringLiteral("最大图像宽度"), captureMaxWidth_);
     captureForm->addRow(QStringLiteral("压缩质量"), captureQuality_);
@@ -189,6 +253,13 @@ SettingsDialog::SettingsDialog(SettingsController* controller, QWidget* parent,
             QStringLiteral("注意：启用后，屏幕截图会发送给当前配置的远程模型。"
                            "你的隐私信息可能会被截图并发送到远端，"
                            "一定要注意在隐私页面关闭截屏。"),
+            QMessageBox::Ok);
+    });
+    connect(automaticCaptureHelp, &QPushButton::clicked, this, [this]() {
+        QMessageBox::information(
+            this, QStringLiteral("定时截图费用提醒"),
+            QStringLiteral("如果截图间隔太短，可能会产生大量的费用且占据更多的对话上下文，"
+                           "推荐将截图间隔至少在60s以上。"),
             QMessageBox::Ok);
     });
     connect(captureTestButton_, &QPushButton::clicked, this, [this]() {
@@ -208,6 +279,8 @@ SettingsDialog::SettingsDialog(SettingsController* controller, QWidget* parent,
             captureOnChat_->setChecked(false);
         }
     });
+    connect(includeOwnWindowsInCapture_, &QCheckBox::toggled,
+            this, [this]() { updateCaptureExclusionStatus(); });
 
     auto* buttons = new QHBoxLayout();
     auto* test = new QPushButton(QStringLiteral("测试连接"), this);
@@ -235,8 +308,30 @@ SettingsDialog::SettingsDialog(SettingsController* controller, QWidget* parent,
     if (controller_ != nullptr) {
         connect(controller_, &SettingsController::connectionTestFinished,
                 this, &SettingsDialog::onTestFinished);
+        connect(controller_, &SettingsController::uiConfigurationChanged,
+                this, [this](const UiConfig& ui) {
+                    const QSignalBlocker scaleBlocker(windowScalePercent_);
+                    const QSignalBlocker captureBlocker(screenCaptureEnabled_);
+                    const QSignalBlocker automaticBlocker(automaticScreenAnalysisEnabled_);
+                    const QSignalBlocker chatBlocker(captureOnChat_);
+                    windowScalePercent_->setValue(ui.windowScalePercent);
+                    screenCaptureEnabled_->setChecked(ui.screenCaptureEnabled);
+                    automaticScreenAnalysisEnabled_->setChecked(
+                        ui.automaticScreenAnalysisEnabled);
+                    automaticScreenAnalysisEnabled_->setEnabled(ui.screenCaptureEnabled);
+                    captureOnChat_->setChecked(ui.captureOnChat);
+                    captureOnChat_->setEnabled(ui.screenCaptureEnabled);
+                    includeOwnWindowsInCapture_->setChecked(
+                        !ui.excludeOwnWindowsFromCapture);
+                    updateCaptureExclusionStatus();
+                });
         populate();
     }
+    if (captureUiController_ != nullptr) {
+        connect(captureUiController_, &CaptureUiController::ownWindowExclusionStatusChanged,
+                this, [this]() { updateCaptureExclusionStatus(); });
+    }
+    updateCaptureExclusionStatus();
 }
 
 void SettingsDialog::populate()
@@ -265,12 +360,14 @@ void SettingsDialog::populate()
     contextTokens_->setValue(limits.maxContextTokens);
     bubbleDurationSeconds_->setValue(controller_->uiConfig().replyBubbleDurationMs / 1000);
     const UiConfig ui = controller_->uiConfig();
+    windowScalePercent_->setValue(ui.windowScalePercent);
     screenCaptureEnabled_->setChecked(ui.screenCaptureEnabled);
     automaticScreenAnalysisEnabled_->setChecked(ui.automaticScreenAnalysisEnabled);
     automaticScreenAnalysisEnabled_->setEnabled(ui.screenCaptureEnabled);
     captureOnChat_->setEnabled(ui.screenCaptureEnabled);
     screenCaptureIntervalSeconds_->setValue(ui.screenCaptureIntervalMs / 1000);
     captureOnChat_->setChecked(ui.captureOnChat);
+    includeOwnWindowsInCapture_->setChecked(!ui.excludeOwnWindowsFromCapture);
     captureImageFormat_->setCurrentIndex(captureImageFormat_->findData(ui.captureImageFormat));
     captureMaxWidth_->setValue(ui.captureMaxWidth);
     captureQuality_->setValue(ui.captureQuality);
@@ -335,10 +432,12 @@ void SettingsDialog::applySettings()
     limits.longTermMemoryLimit = longTermLimit_->value(); limits.maxContextTokens = contextTokens_->value();
     UiConfig ui = controller_->uiConfig();
     ui.replyBubbleDurationMs = bubbleDurationSeconds_->value() * 1000;
+    ui.windowScalePercent = windowScalePercent_->value();
     ui.screenCaptureEnabled = screenCaptureEnabled_->isChecked();
     ui.automaticScreenAnalysisEnabled = automaticScreenAnalysisEnabled_->isChecked();
     ui.screenCaptureIntervalMs = screenCaptureIntervalSeconds_->value() * 1000;
     ui.captureOnChat = captureOnChat_->isChecked();
+    ui.excludeOwnWindowsFromCapture = !includeOwnWindowsInCapture_->isChecked();
     ui.captureImageFormat = captureImageFormat_->currentData().toString();
     ui.captureMaxWidth = captureMaxWidth_->value();
     ui.captureQuality = captureQuality_->value();
@@ -380,6 +479,25 @@ void SettingsDialog::onTestFinished(bool succeeded, const AppError& error)
 void SettingsDialog::showError(const AppError& error)
 {
     status_->setText(error.message);
+}
+
+void SettingsDialog::updateCaptureExclusionStatus()
+{
+    if (captureExclusionStatus_ == nullptr) return;
+    if (includeOwnWindowsInCapture_ != nullptr
+        && includeOwnWindowsInCapture_->isChecked()) {
+        captureExclusionStatus_->setText(QStringLiteral("已允许自身窗口进入截图"));
+        return;
+    }
+    if (captureUiController_ == nullptr) {
+        captureExclusionStatus_->setText(QStringLiteral("尚未检测自身窗口保护能力"));
+    } else if (captureUiController_->ownWindowExclusionAvailable()) {
+        captureExclusionStatus_->setText(QStringLiteral("可用：桌宠自身窗口不会进入截图"));
+    } else {
+        captureExclusionStatus_->setText(QStringLiteral(
+            "不可用：定时截图将被关闭。%1")
+            .arg(captureUiController_->ownWindowExclusionDetail()));
+    }
 }
 
 } // namespace zhu_screen_pet

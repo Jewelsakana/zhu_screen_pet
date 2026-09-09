@@ -1,13 +1,17 @@
 #include "ui/ChatInputPanel.h"
 
 #include <QEvent>
+#include <QApplication>
+#include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QInputMethodEvent>
 #include <QKeyEvent>
 #include <QPushButton>
 #include <QTextEdit>
+#include <QtMath>
 
 #include "infrastructure/DesktopWindowPolicy.h"
+#include "ui/UiScaleMetrics.h"
 
 namespace zhu_screen_pet {
 
@@ -17,12 +21,6 @@ ChatInputPanel::ChatInputPanel(QWidget* parent)
     setObjectName(QStringLiteral("chatInputPanel"));
     setAttribute(Qt::WA_StyledBackground, true);
     DesktopWindowPolicy::apply(this, {true, true, true, false, true, false});
-    setStyleSheet(QStringLiteral(
-        "QWidget#chatInputPanel{background:transparent;border:none;}"
-        "QTextEdit{color:#26375d;background:#fffdf8;border:1px solid #eadfca;border-radius:17px;padding:9px;}"
-        "QPushButton{color:#17345f;background:#79adf3;border:none;border-radius:17px;padding:8px 13px;}"
-        "QPushButton#retryButton{background:#a88cf5;color:#24184f;}"
-        "QPushButton:disabled{background:#e5e7eb;color:#9ca3af;}"));
     auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(12, 8, 8, 8);
     input_ = new QTextEdit(this);
@@ -50,7 +48,7 @@ ChatInputPanel::ChatInputPanel(QWidget* parent)
     connect(send_, &QPushButton::clicked, this, &ChatInputPanel::sendRequested);
     connect(cancel_, &QPushButton::clicked, this, &ChatInputPanel::cancelRequested);
     connect(retry_, &QPushButton::clicked, this, &ChatInputPanel::retryRequested);
-    adjustSize();
+    setUiScalePercent(100);
 }
 
 QString ChatInputPanel::text() const { return input_->toPlainText().trimmed(); }
@@ -62,9 +60,53 @@ void ChatInputPanel::setBusy(bool busy)
     send_->setEnabled(!busy);
     cancel_->setVisible(busy);
     input_->setEnabled(!busy);
+    setUiScalePercent(uiScalePercent_);
 }
 
 void ChatInputPanel::setRetryEnabled(bool enabled) { retry_->setEnabled(enabled); }
+
+void ChatInputPanel::setUiScalePercent(int percent)
+{
+    uiScalePercent_ = percent;
+    const UiScaleMetrics metrics(percent);
+    const int fieldRadius = metrics.scaled(17, 7);
+    const int fieldPadding = metrics.scaled(9, 5);
+    const int buttonRadius = metrics.scaled(17, 7);
+    const int buttonVerticalPadding = metrics.scaled(8, 5);
+    const int buttonHorizontalPadding = metrics.scaled(13, 8);
+    setStyleSheet(QStringLiteral(
+        "QWidget#chatInputPanel{background:transparent;border:none;}"
+        "QTextEdit{color:#26375d;background:#fffdf8;border:1px solid #eadfca;"
+        "border-radius:%1px;padding:%2px;}"
+        "QPushButton{color:#17345f;background:#79adf3;border:none;border-radius:%3px;"
+        "padding:%4px %5px;}"
+        "QPushButton#retryButton{background:#a88cf5;color:#24184f;}"
+        "QPushButton:disabled{background:#e5e7eb;color:#9ca3af;}")
+        .arg(fieldRadius).arg(fieldPadding).arg(buttonRadius)
+        .arg(buttonVerticalPadding).arg(buttonHorizontalPadding));
+    if (auto* box = qobject_cast<QHBoxLayout*>(layout())) {
+        box->setContentsMargins(metrics.scaled(12), metrics.scaled(8),
+                                metrics.scaled(8), metrics.scaled(8));
+        box->setSpacing(metrics.scaled(6, 4));
+    }
+    const QFont readableFont = metrics.readableFont(QApplication::font());
+    input_->setFont(readableFont);
+    const int textHeight = QFontMetrics(readableFont).height();
+    input_->setFixedHeight(qMax(metrics.scaled(54), textHeight + fieldPadding * 2 + 8));
+    for (QPushButton* button : {retry_, cancel_, send_}) {
+        button->setFont(readableFont);
+        button->setMinimumWidth(0);
+        button->setMinimumHeight(qMax(metrics.scaled(38),
+            textHeight + buttonVerticalPadding * 2 + 2));
+        button->setMinimumWidth(button->sizeHint().width());
+    }
+    input_->setMinimumWidth(metrics.scaled(260, 120));
+    setMinimumSize(QSize(0, 0));
+    setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+    adjustSize();
+    const int contentWidth = minimumSizeHint().width();
+    setFixedSize(qMax(metrics.scaled(520), contentWidth), sizeHint().height());
+}
 
 bool ChatInputPanel::canAutoHide() const
 {

@@ -138,7 +138,8 @@ private slots:
 
         HttpClient httpClient;
         ProviderConfig config;
-        config.baseUrl = QStringLiteral("http://127.0.0.1:%1").arg(server.serverPort());
+        config.baseUrl = QStringLiteral("http://127.0.0.1:%1/v1/chat/completions/")
+            .arg(server.serverPort());
         config.model = QStringLiteral("test-model");
         config.apiKey = QStringLiteral("test-key");
         config.timeoutMs = 2000;
@@ -163,7 +164,10 @@ private slots:
         const ChatResult result = resultFromSpy(spy);
         QVERIFY(result.succeeded);
         QCOMPARE(result.content, QStringLiteral("local reply"));
-        QVERIFY(receivedRequest.contains("Authorization: Bearer test-key"));
+        // HTTP field names are case-insensitive; Qt 6 may serialize them in lowercase.
+        QVERIFY(receivedRequest.toLower().contains("authorization: bearer test-key"));
+        const QByteArray requestLine = receivedRequest.left(receivedRequest.indexOf("\r\n"));
+        QCOMPARE(requestLine.split(' ').value(1), QByteArrayLiteral("/v1/chat/completions"));
         QVERIFY(receivedRequest.contains("\"model\":\"test-model\""));
         QVERIFY(receivedRequest.contains("\"content\":\"hello\""));
     }

@@ -20,6 +20,7 @@ public:
     void focusInput();
     void setBusy(bool busy);
     void setRetryEnabled(bool enabled);
+    void setUiScalePercent(int percent);
     bool canAutoHide() const;
 
 signals:
@@ -36,6 +37,7 @@ private:
     QPushButton* cancel_ = nullptr;
     QPushButton* retry_ = nullptr;
     bool composing_ = false;
+    int uiScalePercent_ = 100;
 };
 
 } // namespace zhu_screen_pet

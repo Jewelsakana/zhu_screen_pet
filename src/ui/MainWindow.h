@@ -5,6 +5,7 @@
 #include <QMainWindow>
 #include <QPixmap>
 #include <QPoint>
+#include <QRect>
 #include <QVector>
 
 #include "app/ModelErrorPresenter.h"
@@ -27,11 +28,13 @@ namespace zhu_screen_pet {
 class ActionPanel;
 class ChatController;
 class ChatInputPanel;
+class CaptureUiController;
 class ConversationController;
 class ConversationWindow;
 class ErrorBannerWindow;
 class ErrorCenter;
 class HoverRevealController;
+class PetWindowResizeController;
 class ReplyBubbleWindow;
 class SettingsController;
 class ScreenCapture;
@@ -84,6 +87,10 @@ private:
     QWidget* createHotZone(const QString& objectName, const QSize& size);
     void repositionConversationChain();
     void applyUiConfig(const UiConfig& config);
+    void applyWindowScale();
+    void persistInteractiveScale();
+    void toggleScreenCapture(bool enabled);
+    void toggleCaptureOnChat(bool enabled);
     void updatePetAvatar();
     void sendCurrentMessage();
     void retryLastMessage();
@@ -111,8 +118,6 @@ private:
     QString currentRequestId_;
     bool streamingReplyStarted_ = false;
     bool currentRequestIsScreenshot_ = false;
-    bool dragging_ = false;
-    QPoint dragOffset_;
     UiConfig uiConfig_;
     QPixmap petAvatarPixmap_;
 
@@ -130,6 +135,9 @@ private:
     WindowAttachmentManager* attachments_ = nullptr;
     bool repositioningConversationChain_ = false;
     ScreenObservationCoordinator* screenObservation_ = nullptr;
+    CaptureUiController* captureUiController_ = nullptr;
+    PetWindowResizeController* resizeController_ = nullptr;
+    bool captureCorrectionPending_ = false;
 };
 
 } // namespace zhu_screen_pet

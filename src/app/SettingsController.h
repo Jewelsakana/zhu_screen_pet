@@ -58,6 +58,8 @@ public:
     bool apply(const ModelProviderConfig& model, const PersonaConfig& persona,
                const MemoryLimits& limits, const UiConfig& uiConfig,
                const QString& apiKey, AppError* error = nullptr);
+    /** 单独保存界面配置，不切换模型，也不受正在进行的模型请求影响。 */
+    bool updateUiConfig(const UiConfig& uiConfig, AppError* error = nullptr);
     void setInitialUiConfig(const UiConfig& uiConfig);
     /** 由 UI 在用户确认后取消活动请求；会话和历史消息不会关闭或删除。 */
     void cancelActiveChat();

@@ -1,6 +1,8 @@
 #include "ui/ConversationWindow.h"
 
 #include <QDialog>
+#include <QApplication>
+#include <QFontMetrics>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHideEvent>
@@ -13,11 +15,13 @@
 #include <QScreen>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
+#include <QtMath>
 
 #include "app/ConversationController.h"
 #include "infrastructure/DesktopWindowPolicy.h"
 #include "infrastructure/WindowPlacement.h"
 #include "ui/ConversationHistoryWindow.h"
+#include "ui/UiScaleMetrics.h"
 
 namespace zhu_screen_pet {
 
@@ -88,6 +92,7 @@ ConversationWindow::ConversationWindow(QWidget* parent)
     connect(archive, &QPushButton::clicked, this, &ConversationWindow::archiveConversation);
     connect(remove, &QPushButton::clicked, this, &ConversationWindow::deleteConversation);
     connect(archived, &QPushButton::clicked, this, &ConversationWindow::manageArchived);
+    setUiScalePercent(100);
     hide();
 }
 
@@ -187,6 +192,72 @@ void ConversationWindow::setConversationAvatarPath(const QString& path)
     if (historyWindow_ != nullptr) historyWindow_->setPetAvatarPath(path);
 }
 
+void ConversationWindow::setUiScalePercent(int percent)
+{
+    uiScalePercent_ = percent;
+    const UiScaleMetrics metrics(percent);
+    const int frameRadius = metrics.scaled(24, 10);
+    const int listRadius = metrics.scaled(16, 7);
+    const int itemRadius = metrics.scaled(14, 7);
+    const int itemMarginY = metrics.scaled(6, 3);
+    const int itemMarginX = metrics.scaled(2);
+    const int itemPadding = metrics.scaled(14, 6);
+    const int buttonRadius = metrics.scaled(11, 6);
+    const int buttonPaddingY = metrics.scaled(8, 5);
+    const int buttonPaddingX = metrics.scaled(12, 8);
+    setStyleSheet(QStringLiteral(
+        "QWidget#conversationWindow{background:#dcecff;border:1px solid #9bb9ea;"
+        "border-radius:%1px;}"
+        "QLabel#conversationListTitle{color:#26375d;font-weight:600;}"
+        "QListWidget{background:transparent;border:none;border-radius:%2px;outline:none;"
+        "padding:%3px;}"
+        "QListWidget::item{background:#fffaf0;color:#26375d;border:1px solid #eadfca;"
+        "border-radius:%4px;margin:%5px %6px;padding:%7px;}"
+        "QListWidget::item:hover{background:#fff2d8;border-color:#adc6ee;}"
+        "QListWidget::item:selected{background:#f7edff;color:#4b347b;border-color:#a88cf5;}"
+        "QPushButton{background:#fffaf0;color:#36558f;border:1px solid #c9d9f1;"
+        "border-radius:%8px;padding:%9px %10px;}"
+        "QPushButton:hover{background:#fff1d7;}"
+        "QPushButton#newConversationButton{background:#79adf3;color:#17345f;border:none;}")
+        .arg(frameRadius).arg(listRadius).arg(metrics.scaled(2)).arg(itemRadius)
+        .arg(itemMarginY).arg(itemMarginX).arg(itemPadding).arg(buttonRadius)
+        .arg(buttonPaddingY).arg(buttonPaddingX));
+    if (auto* box = qobject_cast<QVBoxLayout*>(layout())) {
+        box->setContentsMargins(metrics.scaled(16), metrics.scaled(14),
+                                metrics.scaled(16), metrics.scaled(16));
+        box->setSpacing(metrics.scaled(12, 6));
+    }
+    list_->setSpacing(metrics.scaled(2));
+    const QFont readableFont = metrics.readableFont(QApplication::font());
+    list_->setFont(readableFont);
+    QFont titleFont = readableFont;
+    titleFont.setBold(true);
+    titleFont.setPointSizeF(qMax(readableFont.pointSizeF(),
+                                 11.0 * qMax(metrics.factor(), 0.75)));
+    if (QLabel* title = findChild<QLabel*>(QStringLiteral("conversationListTitle"))) {
+        title->setFont(titleFont);
+    }
+    const int textHeight = QFontMetrics(readableFont).height();
+    for (QPushButton* button : findChildren<QPushButton*>()) {
+        button->setFont(readableFont);
+        button->setMinimumWidth(0);
+        button->setMinimumHeight(qMax(metrics.scaled(34),
+                                      textHeight + buttonPaddingY * 2 + 2));
+        button->setMinimumWidth(button->sizeHint().width());
+    }
+    const int itemHeight = conversationItemHeight();
+    for (int index = 0; index < list_->count(); ++index) {
+        list_->item(index)->setSizeHint(QSize(0, itemHeight));
+    }
+    const QSize desiredMinimum = metrics.scaledForWindow(this, QSize(270, 390));
+    const QSize desiredSize = metrics.scaledForWindow(this, QSize(320, 540));
+    setMinimumSize(QSize(0, 0));
+    const QSize contentMinimum = minimumSizeHint();
+    setMinimumSize(desiredMinimum.expandedTo(contentMinimum));
+    resize(desiredSize.expandedTo(minimumSize()));
+    if (historyWindow_ != nullptr) historyWindow_->setUiScalePercent(percent);
+}
+
 void ConversationWindow::hideAllHistoryWindows()
 {
     if (historyWindow_ != nullptr) historyWindow_->hide();
@@ -207,7 +278,7 @@ void ConversationWindow::refreshList(const QVector<Conversation>& conversations)
         const Conversation& conversation = conversations.at(index);
         auto* item = new QListWidgetItem(conversation.title, list_);
         item->setData(Qt::UserRole, conversation.id);
-        item->setSizeHint(QSize(0, 66));
+        item->setSizeHint(QSize(0, conversationItemHeight()));
         if (conversation.id == selected || (selected.isEmpty() && conversation.id == currentId_)) {
             selectedRow = index;
         }
@@ -231,6 +302,7 @@ void ConversationWindow::showCurrentHistory()
         // 历史窗口是真正无父级的顶层窗口，由本列表窗口显式管理生命周期。
         historyWindow_ = new ConversationHistoryWindow();
         historyWindow_->setPetAvatarPath(conversationAvatarPath_);
+        historyWindow_->setUiScalePercent(uiScalePercent_);
         connect(historyWindow_, &ConversationHistoryWindow::olderMessagesRequested,
                 this, [this]() {
                     if (controller_ != nullptr && !controller_->loadOlderMessages()
@@ -265,6 +337,15 @@ QString ConversationWindow::selectedConversationId() const
 {
     return list_ != nullptr && list_->currentItem() != nullptr
         ? list_->currentItem()->data(Qt::UserRole).toString() : QString{};
+}
+
+int ConversationWindow::conversationItemHeight() const
+{
+    const UiScaleMetrics metrics(uiScalePercent_);
+    const int padding = metrics.scaled(14, 6);
+    const int margin = metrics.scaled(6, 3);
+    return qMax(metrics.scaled(66), QFontMetrics(list_->font()).height()
+                + 2 * padding + 2 * margin + 2);
 }
 
 void ConversationWindow::createConversation()

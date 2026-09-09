@@ -92,6 +92,10 @@ QString ChatController::sendMessageInternal(const QString& conversationId, const
     contextRequest.conversationId = conversationId;
     contextRequest.currentInput = text;
     contextRequest.includeLatestObservation = image == nullptr;
+    if (image != nullptr) {
+        contextRequest.reservedInputTokens = MemoryOrchestrator::estimateImageTokens(
+            image->size, image->detail);
+    }
     contextRequest.leadingMessages.push_back(
         Message::create(MessageRole::System, persona_.systemInstruction()));
     QString errorMessage;

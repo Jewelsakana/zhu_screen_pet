@@ -55,6 +55,31 @@ void SettingsController::setInitialUiConfig(const UiConfig& uiConfig)
     uiConfig_ = uiConfig.normalized();
 }
 
+bool SettingsController::updateUiConfig(const UiConfig& sourceUi, AppError* error)
+{
+    if (appRepository_ == nullptr || chatController_ == nullptr || memory_ == nullptr) {
+        return fail(makeError(AppErrorCode::NotReady, QStringLiteral("界面设置暂不可用"),
+                              QStringLiteral("UI configuration dependencies are unavailable"),
+                              QStringLiteral("settings.update_ui")), error);
+    }
+    const UiConfig ui = sourceUi.normalized();
+    QString technical;
+    if (!ui.validate(&technical)) {
+        return fail(makeError(AppErrorCode::ConfigInvalid, QStringLiteral("界面设置校验失败"),
+                              technical, QStringLiteral("settings.update_ui")), error);
+    }
+    SettingsApplyTransaction transaction(modelRepository_, appRepository_, providerManager_,
+                                          chatController_, memory_, secretStore_);
+    AppError transactionError;
+    if (!transaction.executeUi(chatController_->personaConfig(), memory_->limits(), ui,
+                               &transactionError)) {
+        return fail(transactionError, error);
+    }
+    uiConfig_ = ui;
+    emit uiConfigurationChanged(uiConfig_);
+    return true;
+}
+
 QStringList SettingsController::modelProfileIds(QString* errorMessage) const
 {
     return modelRepository_ == nullptr ? QStringList{} : modelRepository_->profileIds(errorMessage);

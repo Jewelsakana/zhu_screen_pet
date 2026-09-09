@@ -119,6 +119,10 @@ bool AppConfigRepository::load(PersonaConfig* persona,
         if (uiObject.contains(QStringLiteral("capture_on_chat"))) {
             loadedUi.captureOnChat = uiObject.value(QStringLiteral("capture_on_chat")).toBool();
         }
+        if (uiObject.contains(QStringLiteral("exclude_own_windows_from_capture"))) {
+            loadedUi.excludeOwnWindowsFromCapture = uiObject.value(
+                QStringLiteral("exclude_own_windows_from_capture")).toBool();
+        }
         if (uiObject.contains(QStringLiteral("capture_image_format"))) {
             loadedUi.captureImageFormat = uiObject.value(
                 QStringLiteral("capture_image_format")).toString();
@@ -140,8 +144,13 @@ bool AppConfigRepository::load(PersonaConfig* persona,
         if (uiObject.contains(QStringLiteral("fade_duration_ms"))) {
             loadedUi.fadeDurationMs = uiObject.value(QStringLiteral("fade_duration_ms")).toInt();
         }
-        if (!loadedUi.validate(errorMessage)) return false;
-        *uiConfig = loadedUi.normalized();
+        if (uiObject.contains(QStringLiteral("main_window_scale_percent"))) {
+            loadedUi.windowScalePercent = uiObject.value(
+                QStringLiteral("main_window_scale_percent")).toInt();
+        }
+        const UiConfig normalizedUi = loadedUi.normalized();
+        if (!normalizedUi.validate(errorMessage)) return false;
+        *uiConfig = normalizedUi;
     }
     return true;
 }
@@ -202,6 +211,8 @@ bool AppConfigRepository::save(const PersonaConfig& source, const MemoryLimits& 
         uiObject.insert(QStringLiteral("screen_capture_interval_ms"),
                         normalizedUi.screenCaptureIntervalMs);
         uiObject.insert(QStringLiteral("capture_on_chat"), normalizedUi.captureOnChat);
+        uiObject.insert(QStringLiteral("exclude_own_windows_from_capture"),
+                        normalizedUi.excludeOwnWindowsFromCapture);
         uiObject.insert(QStringLiteral("capture_image_format"), normalizedUi.captureImageFormat);
         uiObject.insert(QStringLiteral("capture_max_width"), normalizedUi.captureMaxWidth);
         uiObject.insert(QStringLiteral("capture_quality"), normalizedUi.captureQuality);
@@ -209,6 +220,8 @@ bool AppConfigRepository::save(const PersonaConfig& source, const MemoryLimits& 
                         normalizedUi.replyBubbleDurationMs);
         uiObject.insert(QStringLiteral("hover_hide_delay_ms"), normalizedUi.hoverHideDelayMs);
         uiObject.insert(QStringLiteral("fade_duration_ms"), normalizedUi.fadeDurationMs);
+        uiObject.insert(QStringLiteral("main_window_scale_percent"),
+                        normalizedUi.windowScalePercent);
         root.insert(QStringLiteral("ui"), uiObject);
     }
 

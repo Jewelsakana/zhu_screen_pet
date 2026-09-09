@@ -8,7 +8,7 @@
 
 namespace zhu_screen_pet {
 
-/** 管理截图授权、定时、去重和临时文件生命周期。 */
+/** 管理截图授权、定时和去重；自动截图始终只驻留内存。 */
 class ScreenObservationCoordinator final : public QObject
 {
     Q_OBJECT
@@ -21,6 +21,10 @@ public:
     void setCaptureDirectory(const QString& directory);
     void applyConfiguration(const UiConfig& config);
     void setObservationReady(bool ready);
+    /** 设置当前观察所属会话；作用域变化时清空上一会话的屏幕指纹。 */
+    void setObservationScope(const QString& scopeId);
+    /** 模型切换等语义边界发生变化时清空屏幕指纹。 */
+    void resetFingerprint();
     void setBusy(bool busy);
     void shutdown();
     bool captureForChat(CapturedImage* image, AppError* error = nullptr);
@@ -33,13 +37,12 @@ signals:
 private:
     void onCaptured(const CapturedImage& image);
     void updateTimer();
-    void discard(const QString& path, const QString& operation);
     void report(const QString& detail, const QString& operation);
 
     ScreenCapture* capture_ = nullptr;
     UiConfig config_;
     QString captureDirectory_;
-    QString activePath_;
+    QString observationScopeId_;
     QByteArray lastSentFingerprint_;
     bool observationReady_ = false;
     bool busy_ = false;

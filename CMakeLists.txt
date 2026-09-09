@@ -47,14 +47,14 @@ if (WIN32)
         "${ZHU_SCREEN_PET_QT_PREFIX}/bin"
         ${ZHU_SCREEN_PET_OPENSSL_TOOL_DIRS})
     set(ZHU_SCREEN_PET_SSL_NAMES
-        "libssl-3-x64.dll" "libssl-3.dll" "libssl-1_1-x64.dll")
+        "libssl-3-x64.dll" "libssl-3.dll")
     set(ZHU_SCREEN_PET_CRYPTO_NAMES
-        "libcrypto-3-x64.dll" "libcrypto-3.dll" "libcrypto-1_1-x64.dll")
+        "libcrypto-3-x64.dll" "libcrypto-3.dll")
     foreach(candidate_dir IN LISTS ZHU_SCREEN_PET_OPENSSL_SEARCH_DIRS)
         if (NOT candidate_dir OR ZHU_SCREEN_PET_OPENSSL_RUNTIME_FILES)
             continue()
         endif()
-        foreach(pair_index RANGE 0 2)
+        foreach(pair_index RANGE 0 1)
             list(GET ZHU_SCREEN_PET_SSL_NAMES ${pair_index} ssl_name)
             list(GET ZHU_SCREEN_PET_CRYPTO_NAMES ${pair_index} crypto_name)
             if (EXISTS "${candidate_dir}/${ssl_name}"
@@ -165,15 +165,30 @@ target_link_libraries(zhu_screen_pet PRIVATE zhu_screen_pet_ui zhu_screen_pet_ap
     zhu_screen_pet_infrastructure zhu_screen_pet_core Qt6::Widgets)
 set_target_properties(zhu_screen_pet PROPERTIES VERSION ${PROJECT_VERSION} OUTPUT_NAME "小珠看着你")
 
-# 生成可复制到无 Qt 开发环境电脑上运行的 Windows 便携发布目录。
-# 该目标独立于普通编译，避免每次开发构建都执行 windeployqt。
+# 为普通 Windows 构建部署 Qt 运行库，使构建目录中的程序和测试无需依赖 Qt PATH。
+# 完整便携包仍由 zhu_screen_pet_portable 生成，并额外包含配置与 MSVC 运行库。
 if (WIN32)
     get_filename_component(ZHU_SCREEN_PET_QT_BIN_DIR
         "${Qt6_DIR}/../../../bin" ABSOLUTE)
+    # Qt 5 -> Qt 6 迁移时，旧构建目录可能缓存了上一套 Qt 的工具路径。
+    unset(ZHU_SCREEN_PET_WINDEPLOYQT_EXECUTABLE CACHE)
+    unset(ZHU_SCREEN_PET_WINDEPLOYQT_EXECUTABLE)
     find_program(ZHU_SCREEN_PET_WINDEPLOYQT_EXECUTABLE
         NAMES windeployqt
         HINTS "${ZHU_SCREEN_PET_QT_BIN_DIR}"
         NO_DEFAULT_PATH)
+    if (ZHU_SCREEN_PET_WINDEPLOYQT_EXECUTABLE)
+        add_custom_command(TARGET zhu_screen_pet POST_BUILD
+            COMMAND "${ZHU_SCREEN_PET_WINDEPLOYQT_EXECUTABLE}"
+                "$<IF:$<CONFIG:Debug>,--debug,--release>"
+                --no-compiler-runtime
+                --no-translations
+                --force
+                --dir "$<TARGET_FILE_DIR:zhu_screen_pet>"
+                "$<TARGET_FILE:zhu_screen_pet>"
+            COMMENT "Deploying the Qt runtime next to the application"
+            VERBATIM)
+    endif()
     if (ZHU_SCREEN_PET_WINDEPLOYQT_EXECUTABLE
         AND ZHU_SCREEN_PET_OPENSSL_RUNTIME_FILES
         AND EXISTS "${ZHU_SCREEN_PET_MSVC_RUNTIME_DIR}/msvcp140.dll"
@@ -191,6 +206,9 @@ if (WIN32)
             COMMAND ${CMAKE_COMMAND} -E copy_directory
                 "${CMAKE_BINARY_DIR}/config"
                 "${ZHU_SCREEN_PET_PORTABLE_DIR}/config"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${ZHU_SCREEN_PET_RUNTIME_IMAGE_FILES}
+                "${ZHU_SCREEN_PET_PORTABLE_DIR}"
             COMMAND "${ZHU_SCREEN_PET_WINDEPLOYQT_EXECUTABLE}"
                 "$<IF:$<CONFIG:Debug>,--debug,--release>"
                 --no-compiler-runtime
@@ -211,7 +229,7 @@ if (WIN32)
     else()
         add_custom_target(zhu_screen_pet_portable
             COMMAND ${CMAKE_COMMAND} -E echo
-                "Portable runtime prerequisites are missing: windeployqt, Qt-compatible OpenSSL 1.1, or MSVC x64 CRT."
+                "Portable runtime prerequisites are missing: windeployqt, Qt-compatible OpenSSL 3, or MSVC x64 CRT."
             COMMAND ${CMAKE_COMMAND} -E false
             COMMENT "Cannot create portable package"
             VERBATIM)
@@ -229,12 +247,27 @@ if (ZHU_SCREEN_PET_BUILD_TESTS)
         zhu_screen_pet_deploy_openssl(${target})
         target_link_libraries(${target} PRIVATE zhu_screen_pet_ui zhu_screen_pet_app zhu_screen_pet_memory
             zhu_screen_pet_model zhu_screen_pet_infrastructure zhu_screen_pet_core Qt6::Test Qt6::Widgets)
+        if (WIN32)
+            add_custom_command(TARGET ${target} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "$<TARGET_FILE:Qt6::Test>" "$<TARGET_FILE_DIR:${target}>"
+                COMMENT "Deploying the Qt Test runtime for ${target}"
+                VERBATIM)
+        endif()
         add_test(NAME ${target} COMMAND ${target})
         set_tests_properties(${target} PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${ZHU_SCREEN_PET_QT_PREFIX}/plugins")
     endfunction()
     zhu_screen_pet_add_test(zhu_screen_pet_smoke_test
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke_test.cpp")
+    zhu_screen_pet_add_test(zhu_screen_pet_ui_scaling_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_scaling_test.cpp")
+    zhu_screen_pet_add_test(zhu_screen_pet_settings_transaction_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/settings_transaction_test.cpp")
+    zhu_screen_pet_add_test(zhu_screen_pet_config_repository_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/config_repository_test.cpp")
+    zhu_screen_pet_add_test(zhu_screen_pet_window_behavior_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/window_behavior_test.cpp")
     zhu_screen_pet_add_test(zhu_screen_pet_model_provider_test
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/model_provider_test.cpp")
     zhu_screen_pet_add_test(zhu_screen_pet_memory_chat_test

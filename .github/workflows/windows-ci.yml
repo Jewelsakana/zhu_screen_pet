@@ -5,7 +5,7 @@ on:
   pull_request:
 
 jobs:
-  build-and-test:
+  debug-build-and-test:
     runs-on: windows-2022
     timeout-minutes: 20
     steps:
@@ -25,3 +25,82 @@ jobs:
         run: cmake --build build --config Debug --parallel
       - name: Test
         run: ctest --test-dir build -C Debug --output-on-failure
+
+  release-portable:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Qt 6.8.3
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.8.3
+          arch: win64_msvc2022_64
+          cache: true
+      - name: Verify bundled OpenSSL checksums
+        shell: pwsh
+        run: |
+          $runtimeDirectory = Join-Path $env:GITHUB_WORKSPACE 'third_party/openssl/win64'
+          $manifestPath = Join-Path $runtimeDirectory 'SHA256SUMS.txt'
+          $entries = Get-Content -LiteralPath $manifestPath |
+            Where-Object { $_ -match '^([A-Fa-f0-9]{64})\s+(.+)$' } |
+            ForEach-Object {
+              [pscustomobject]@{ Expected = $Matches[1].ToUpperInvariant(); Name = $Matches[2].Trim() }
+            }
+          if ($entries.Count -ne 2) { throw 'Expected exactly two OpenSSL DLL checksum entries.' }
+          foreach ($entry in $entries) {
+            $path = Join-Path $runtimeDirectory $entry.Name
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Missing bundled OpenSSL runtime: $($entry.Name)"
+            }
+            $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+            if ($actual -ne $entry.Expected) {
+              throw "OpenSSL checksum mismatch: $($entry.Name)"
+            }
+          }
+      - name: Configure Release
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $visualStudio = & $vswhere -latest -products '*' -property installationPath
+          $crtDirectory = Get-ChildItem -Path "$visualStudio/VC/Redist/MSVC/*/x64/Microsoft.VC*.CRT" -Directory |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if ($null -eq $crtDirectory) { throw 'MSVC x64 runtime directory was not found.' }
+          cmake -S . -B build-release -A x64 `
+            '-DZHU_SCREEN_PET_BUILD_TESTS=ON' `
+            "-DZHU_SCREEN_PET_OPENSSL_RUNTIME_DIR=$env:GITHUB_WORKSPACE/third_party/openssl/win64" `
+            "-DZHU_SCREEN_PET_MSVC_RUNTIME_DIR=$($crtDirectory.FullName)"
+      - name: Build and link Release
+        run: cmake --build build-release --config Release --parallel
+      - name: Test Release
+        run: ctest --test-dir build-release -C Release --output-on-failure
+      - name: Build portable package
+        run: cmake --build build-release --config Release --target zhu_screen_pet_portable --parallel
+      - name: Verify portable runtime and startup
+        shell: pwsh
+        run: |
+          $portableDirectory = Join-Path $env:GITHUB_WORKSPACE 'build-release/dist/Release'
+          $runtimeDirectory = Join-Path $env:GITHUB_WORKSPACE 'third_party/openssl/win64'
+          Get-Content -LiteralPath (Join-Path $runtimeDirectory 'SHA256SUMS.txt') |
+            Where-Object { $_ -match '^([A-Fa-f0-9]{64})\s+(.+)$' } |
+            ForEach-Object {
+              $expected = $Matches[1].ToUpperInvariant()
+              $name = $Matches[2].Trim()
+              $actual = (Get-FileHash -LiteralPath (Join-Path $portableDirectory $name) -Algorithm SHA256).Hash
+              if ($actual -ne $expected) { throw "Portable OpenSSL checksum mismatch: $name" }
+            }
+          $executable = Get-ChildItem -LiteralPath $portableDirectory -Filter '*.exe' |
+            Where-Object { $_.Name -notmatch '^zhu_screen_pet_.*_test\.exe$' } |
+            Select-Object -First 1
+          if ($null -eq $executable) { throw 'Portable application executable was not found.' }
+          $savedPath = $env:Path
+          $env:Path = "$env:SystemRoot\System32;$env:SystemRoot"
+          $process = Start-Process -FilePath $executable.FullName -WorkingDirectory $portableDirectory `
+            -WindowStyle Hidden -PassThru
+          Start-Sleep -Seconds 5
+          if ($process.HasExited) {
+            throw "Portable application exited during startup with code $($process.ExitCode)."
+          }
+          Stop-Process -Id $process.Id -Force
+          $env:Path = $savedPath

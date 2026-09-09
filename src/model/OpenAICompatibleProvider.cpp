@@ -121,13 +121,14 @@ QUrl OpenAICompatibleProvider::completionUrl() const
 {
     QUrl url(config_.baseUrl);
     QString path = url.path();
+    while (path.size() > 1 && path.endsWith(QLatin1Char('/'))) path.chop(1);
     if (!path.endsWith(QStringLiteral("/chat/completions"))) {
         if (!path.endsWith(QLatin1Char('/'))) {
             path += QLatin1Char('/');
         }
         path += QStringLiteral("chat/completions");
-        url.setPath(path);
     }
+    url.setPath(path);
     return url;
 }
 

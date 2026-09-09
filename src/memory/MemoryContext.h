@@ -41,6 +41,8 @@ struct ContextRequest
     /** 普通聊天可注入最近观察；截图请求自身已有当前图片，应关闭此项。 */
     bool includeLatestObservation = true;
     int latestObservationMaxTokens = 256;
+    /** 图片、工具等不在文本消息中的输入预算。 */
+    int reservedInputTokens = 0;
     /** 必须保留并计入总 token 预算的 system 消息，例如 Persona。 */
     std::vector<Message> leadingMessages;
 };
