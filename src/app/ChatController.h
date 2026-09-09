@@ -34,7 +34,12 @@ public:
                                   const MessageImage& image,
                                   const QByteArray& fingerprint,
                                   const QDateTime& capturedAt,
-                                  const ChatOptions& options = ChatOptions{});
+                                  const ChatOptions& options = ChatOptions{},
+                                  const QString& captureId = {},
+                                  const QString& source = QStringLiteral("primary_screen"),
+                                  int captureDurationMs = 0,
+                                  const QString& appHint = {},
+                                  const QString& modelProvider = {});
     /** 发送用户文本及截图附件，并把该请求作为普通会话消息持久化。 */
     QString sendUserMessageWithScreenshot(
         const QString& conversationId, const QString& text,
@@ -71,6 +76,8 @@ signals:
     void operationFailed(const AppError& error);
     /** 聊天生命周期导致桌宠状态变化时发出。 */
     void stateChanged(PetState state);
+    /** 一轮普通对话已完整保存，可触发后台摘要。 */
+    void conversationTurnCompleted(const QString& conversationId);
 
 private:
     struct PendingChat
@@ -83,6 +90,13 @@ private:
         ChatOptions options;
         QByteArray observationFingerprint;
         QDateTime observationCapturedAt;
+        QString observationCaptureId;
+        QString observationSource;
+        QString observationImageFormat;
+        QSize observationImageSize;
+        int observationDurationMs = 0;
+        QString observationAppHint;
+        QString observationModelProvider;
     };
 
     void onChatStarted(const QString& requestId);
@@ -92,7 +106,9 @@ private:
     QString sendMessageInternal(const QString& conversationId, const QString& text,
                                 const MessageImage* image, const QByteArray& fingerprint,
                                 const QDateTime& capturedAt, ChatRequestKind requestKind,
-                                ChatOptions options);
+                                ChatOptions options, const QString& captureId = {},
+                                const QString& source = {}, int captureDurationMs = 0,
+                                const QString& appHint = {}, const QString& modelProvider = {});
     void setState(PetState state);
     void fail(const AppError& error);
 

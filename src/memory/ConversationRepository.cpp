@@ -76,4 +76,31 @@ QVector<ConversationMessage> ConversationRepository::recentMessages(const QStrin
     return result.value();
 }
 
+QVector<ConversationMessage> ConversationRepository::unsummarizedMessages(const QString& conversationId,
+                                                                            int limit,
+                                                                            QString* errorMessage) const
+{
+    const auto result = unsummarizedMessagesResult(conversationId, limit);
+    if (!result) { copyError(result.error(), errorMessage); return {}; }
+    return result.value();
+}
+
+bool ConversationRepository::markMessagesSummarized(const QVector<qint64>& messageIds,
+                                                    const QDateTime& summarizedAt,
+                                                    QString* errorMessage)
+{
+    const auto result = markMessagesSummarizedResult(
+        messageIds, summarizedAt.isValid() ? summarizedAt : QDateTime::currentDateTimeUtc());
+    if (!result) copyError(result.error(), errorMessage);
+    return result.succeeded();
+}
+
+int ConversationRepository::removeSummarizedBefore(const QDateTime& cutoff,
+                                                    QString* errorMessage)
+{
+    const auto result = removeSummarizedBeforeResult(cutoff);
+    if (!result) copyError(result.error(), errorMessage);
+    return result ? result.value() : -1;
+}
+
 } // namespace zhu_screen_pet

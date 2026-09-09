@@ -24,6 +24,8 @@ class SqliteConversationRepository;
 class SqliteMemoryRepository;
 class SqliteObservationRepository;
 class MemoryOrchestrator;
+class MemoryMaintenanceService;
+class PetLifecycleController;
 class ChatController;
 class ConversationController;
 class SettingsController;
@@ -64,6 +66,8 @@ private:
     std::unique_ptr<SqliteMemoryRepository> memories_;
     std::unique_ptr<SqliteObservationRepository> observations_;
     std::unique_ptr<MemoryOrchestrator> memoryOrchestrator_;
+    std::unique_ptr<MemoryMaintenanceService> memoryMaintenance_;
+    std::unique_ptr<PetLifecycleController> petLifecycle_;
     std::unique_ptr<HttpClient> httpClient_;
     std::unique_ptr<SecretStore> secretStore_;
     std::unique_ptr<ModelConfigRepository> modelConfigs_;

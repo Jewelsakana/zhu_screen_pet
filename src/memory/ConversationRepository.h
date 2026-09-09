@@ -22,6 +22,12 @@ public:
                                              int tokenCount = 0) = 0;
     virtual Result<QVector<ConversationMessage>> recentMessagesResult(
         const QString& conversationId, int limit) const = 0;
+    virtual Result<QVector<ConversationMessage>> unsummarizedMessagesResult(
+        const QString& conversationId, int limit) const = 0;
+    virtual Result<void> markMessagesSummarizedResult(
+        const QVector<qint64>& messageIds, const QDateTime& summarizedAt) = 0;
+    /** 删除摘要已成功保存且超过短期保留期的原始消息。 */
+    virtual Result<int> removeSummarizedBeforeResult(const QDateTime& cutoff) = 0;
 
     // 兼容旧调用方的薄适配层；新代码应优先使用 Result 接口。
     QString createConversation(const QString& title, QString* errorMessage = nullptr);
@@ -34,6 +40,13 @@ public:
                        int tokenCount = 0, QString* errorMessage = nullptr);
     QVector<ConversationMessage> recentMessages(const QString& conversationId, int limit,
                                                 QString* errorMessage = nullptr) const;
+    QVector<ConversationMessage> unsummarizedMessages(const QString& conversationId, int limit,
+                                                      QString* errorMessage = nullptr) const;
+    bool markMessagesSummarized(const QVector<qint64>& messageIds,
+                                const QDateTime& summarizedAt = {},
+                                QString* errorMessage = nullptr);
+    int removeSummarizedBefore(const QDateTime& cutoff,
+                               QString* errorMessage = nullptr);
 };
 
 } // namespace zhu_screen_pet

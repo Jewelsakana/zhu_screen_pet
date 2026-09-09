@@ -32,6 +32,9 @@ class OpenAICompatibleProvider : public ChatProvider
     Q_OBJECT
 
 public:
+    /** Base64 JSON 请求体的本地上限，避免视觉请求在发送前无限膨胀。 */
+    static constexpr qint64 MaximumRequestBodyBytes = 8 * 1024 * 1024;
+
     explicit OpenAICompatibleProvider(
         ProviderConfig config,
         HttpClient* httpClient = nullptr,
@@ -73,6 +76,8 @@ private:
     bool shouldRetry(const HttpResponse& response) const;
     ChatResult parseChatResponse(const HttpResponse& response) const;
     QByteArray buildRequestBody(const PendingRequest& request) const;
+    bool prepareRequestBody(PendingRequest& request, QByteArray* body,
+                            QString* errorMessage) const;
     bool parseSseData(const QString& requestId, const QByteArray& data);
 
     ProviderConfig config_;

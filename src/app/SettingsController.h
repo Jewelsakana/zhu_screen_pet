@@ -9,6 +9,7 @@
 #include "app/PersonaConfig.h"
 #include "app/UiConfig.h"
 #include "memory/MemoryContext.h"
+#include "memory/ConversationTypes.h"
 #include "model/ModelProviderConfig.h"
 #include "model/ChatResult.h"
 
@@ -63,6 +64,11 @@ public:
     void setInitialUiConfig(const UiConfig& uiConfig);
     /** 由 UI 在用户确认后取消活动请求；会话和历史消息不会关闭或删除。 */
     void cancelActiveChat();
+    QVector<MemoryItem> memories(const QString& kind, const QString& query,
+                                 AppError* error = nullptr) const;
+    bool updateMemory(const MemoryItem& item, AppError* error = nullptr);
+    bool deleteMemory(qint64 id, AppError* error = nullptr);
+    bool clearMemories(const QString& kind, AppError* error = nullptr);
 
 signals:
     void settingsApplied(const ModelProviderConfig& model,

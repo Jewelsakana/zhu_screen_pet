@@ -263,6 +263,8 @@ private slots:
         QCOMPARE(limits.relevantHistoryLimit, 5);
         QCOMPARE(limits.longTermMemoryLimit, 5);
         QCOMPARE(limits.maxContextTokens, 8000);
+        QCOMPARE(limits.summaryMessageThreshold, 20);
+        QCOMPARE(limits.summaryTokenThreshold, 4000);
 
         PersonaConfig persona;
         QHash<QString, QString> messages;

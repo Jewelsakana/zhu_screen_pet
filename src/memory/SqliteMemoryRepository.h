@@ -18,6 +18,12 @@ public:
     Result<qint64> saveLongTermResult(const QString& content,
                                       const QString& sourceEventId = {}) override;
     Result<void> removeResult(qint64 id) override;
+    Result<void> clearKindResult(const QString& kind) override;
+    Result<int> cleanupShortTermResult(const QDateTime& now, int maxItems) override;
+    Result<MemoryItem> getResult(qint64 id) const override;
+    Result<qint64> upsertLongTermResult(const MemoryItem& item) override;
+    Result<std::optional<MemoryItem>> conversationSummaryResult(
+        const QString& conversationId) const override;
     Result<QVector<MemoryItem>> searchResult(const QString& query, int limit) const override;
     Result<QVector<ConversationMessage>> searchConversationMessagesResult(
         const QString& query, int limit) const override;

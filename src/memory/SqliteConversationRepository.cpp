@@ -211,4 +211,81 @@ Result<QVector<ConversationMessage>> SqliteConversationRepository::recentMessage
     return Result<QVector<ConversationMessage>>::success(result);
 }
 
+Result<QVector<ConversationMessage>> SqliteConversationRepository::unsummarizedMessagesResult(
+    const QString& conversationId, int limit) const
+{
+    if (database_ == nullptr || !database_->isOpen()) return Result<QVector<ConversationMessage>>::failure(
+        dbError(AppErrorCode::DatabaseUnavailable, QStringLiteral("database is not available"),
+                QStringLiteral("database is not open"), QStringLiteral("conversation.unsummarized")));
+    if (conversationId.trimmed().isEmpty() || limit <= 0) return Result<QVector<ConversationMessage>>::failure(
+        dbError(AppErrorCode::InvalidArgument, QStringLiteral("摘要查询参数无效"),
+                QStringLiteral("conversation id or limit is invalid"), QStringLiteral("conversation.unsummarized")));
+    QSqlQuery query(database_->connection());
+    query.prepare(QStringLiteral("SELECT id,conversation_id,role,content,token_count,created_at,summarized_at "
+                                 "FROM conversation_messages WHERE conversation_id=? AND summarized_at IS NULL "
+                                 "ORDER BY created_at ASC,id ASC LIMIT ?"));
+    query.addBindValue(conversationId); query.addBindValue(limit);
+    if (!query.exec()) return Result<QVector<ConversationMessage>>::failure(dbError(
+        AppErrorCode::DatabaseQuery, QStringLiteral("无法读取待摘要消息"), query.lastError().text(),
+        QStringLiteral("conversation.unsummarized")));
+    QVector<ConversationMessage> result;
+    while (query.next()) {
+        ConversationMessage item;
+        item.id = query.value(0).toLongLong(); item.conversationId = query.value(1).toString();
+        item.message = Message::create(parseRole(query.value(2).toString()), query.value(3).toString());
+        item.tokenCount = query.value(4).toInt(); item.createdAt = parseTime(query.value(5));
+        item.summarizedAt = parseTime(query.value(6)); result.append(item);
+    }
+    return Result<QVector<ConversationMessage>>::success(result);
+}
+
+Result<void> SqliteConversationRepository::markMessagesSummarizedResult(
+    const QVector<qint64>& messageIds, const QDateTime& summarizedAt)
+{
+    if (database_ == nullptr || !database_->isOpen()) return Result<void>::failure(dbError(
+        AppErrorCode::DatabaseUnavailable, QStringLiteral("database is not available"),
+        QStringLiteral("database is not open"), QStringLiteral("conversation.mark_summarized")));
+    if (messageIds.isEmpty() || !summarizedAt.isValid()) return Result<void>::failure(dbError(
+        AppErrorCode::InvalidArgument, QStringLiteral("摘要标记参数无效"),
+        QStringLiteral("message ids or time is invalid"), QStringLiteral("conversation.mark_summarized")));
+    QSqlDatabase db = database_->connection();
+    if (!db.transaction()) return Result<void>::failure(dbError(AppErrorCode::DatabaseQuery,
+        QStringLiteral("无法开始摘要标记事务"), db.lastError().text(), QStringLiteral("conversation.mark_summarized")));
+    QSqlQuery query(db); query.prepare(QStringLiteral(
+        "UPDATE conversation_messages SET summarized_at=? WHERE id=? AND summarized_at IS NULL"));
+    const QString at = summarizedAt.toUTC().toString(Qt::ISODateWithMs);
+    bool ok = true; QString technical;
+    for (qint64 id : messageIds) {
+        query.bindValue(0, at); query.bindValue(1, id);
+        if (!query.exec()) { ok = false; technical = query.lastError().text(); break; }
+    }
+    if (!ok || !db.commit()) {
+        if (technical.isEmpty()) technical = db.lastError().text(); db.rollback();
+        return Result<void>::failure(dbError(AppErrorCode::DatabaseQuery,
+            QStringLiteral("无法标记摘要消息"), technical, QStringLiteral("conversation.mark_summarized")));
+    }
+    return Result<void>::success();
+}
+
+Result<int> SqliteConversationRepository::removeSummarizedBeforeResult(
+    const QDateTime& cutoff)
+{
+    if (database_ == nullptr || !database_->isOpen()) return Result<int>::failure(dbError(
+        AppErrorCode::DatabaseUnavailable, QStringLiteral("database is not available"),
+        QStringLiteral("database is not open"),
+        QStringLiteral("conversation.cleanup_summarized")));
+    if (!cutoff.isValid()) return Result<int>::failure(dbError(
+        AppErrorCode::InvalidArgument, QStringLiteral("短期消息清理时间无效"),
+        QStringLiteral("cleanup cutoff is invalid"),
+        QStringLiteral("conversation.cleanup_summarized")));
+    QSqlQuery query(database_->connection());
+    query.prepare(QStringLiteral(
+        "DELETE FROM conversation_messages WHERE summarized_at IS NOT NULL AND summarized_at<=?"));
+    query.addBindValue(cutoff.toUTC().toString(Qt::ISODateWithMs));
+    if (!query.exec()) return Result<int>::failure(dbError(
+        AppErrorCode::DatabaseQuery, QStringLiteral("无法清理已摘要消息"),
+        query.lastError().text(), QStringLiteral("conversation.cleanup_summarized")));
+    return Result<int>::success(qMax<qint64>(0, query.numRowsAffected()));
+}
+
 } // namespace zhu_screen_pet

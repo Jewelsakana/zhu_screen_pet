@@ -6,6 +6,7 @@
 #include <QSize>
 
 #include "infrastructure/ImageCompressor.h"
+#include "infrastructure/TaskExecutor.h"
 #include "infrastructure/ScreenCapturePolicy.h"
 
 class QTimer;
@@ -21,6 +22,7 @@ enum class CaptureTrigger
 
 struct CapturedImage
 {
+    QString captureId;
     QByteArray data;
     /** 64x36 差分哈希摘要，不包含可还原的截图图像。 */
     QByteArray fingerprint;
@@ -29,6 +31,9 @@ struct CapturedImage
     QDateTime capturedAt;
     QString filePath;
     CaptureTrigger trigger = CaptureTrigger::Manual;
+    QString source = QStringLiteral("primary_screen");
+    QString appHint;
+    int durationMs = 0;
 };
 
 /** 桌面截图服务：当前阶段使用 Qt 兼容后端，为后续 DXGI 后端预留独立接口。 */
@@ -38,6 +43,7 @@ class ScreenCapture final : public QObject
 
 public:
     explicit ScreenCapture(QObject* parent = nullptr);
+    ~ScreenCapture() override;
     void configure(bool enabled, int intervalMs, QString captureDirectory,
                    ImageCompressionOptions options);
     void setCaptureDirectory(const QString& captureDirectory);
@@ -64,12 +70,15 @@ private slots:
 private:
     bool captureInternal(CapturedImage* image, QString* errorMessage,
                          CaptureTrigger trigger, bool persistToDisk);
+    void captureScheduledAsync();
 
     QTimer* timer_ = nullptr;
     bool enabled_ = false;
     int intervalMs_ = 60000;
     QString captureDirectory_;
     ImageCompressionOptions options_;
+    TaskExecutor preprocessing_{1};
+    bool preprocessingActive_ = false;
 };
 
 } // namespace zhu_screen_pet

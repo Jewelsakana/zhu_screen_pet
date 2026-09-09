@@ -9,19 +9,47 @@
 #include <QUrl>
 #include <QFile>
 #include <QFileInfoList>
+#include <QElapsedTimer>
+#include <QUuid>
+#include <QPointer>
 
 #include <utility>
+#include <iterator>
 
 #include "infrastructure/ImageCompressor.h"
 #include "infrastructure/ScreenFingerprint.h"
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
+
 namespace zhu_screen_pet {
+namespace {
+QString foregroundWindowHint()
+{
+#ifdef Q_OS_WIN
+    const HWND window = GetForegroundWindow();
+    if (window == nullptr) return {};
+    wchar_t title[512] = {};
+    const int length = GetWindowTextW(window, title, static_cast<int>(std::size(title)));
+    return length > 0 ? QString::fromWCharArray(title, length) : QString{};
+#else
+    return {};
+#endif
+}
+}
 
 ScreenCapture::ScreenCapture(QObject* parent)
     : QObject(parent), timer_(new QTimer(this))
 {
     timer_->setSingleShot(false);
     connect(timer_, &QTimer::timeout, this, &ScreenCapture::captureOnTimer);
+}
+
+ScreenCapture::~ScreenCapture()
+{
+    timer_->stop();
+    preprocessing_.shutdownAndWait(3000);
 }
 
 void ScreenCapture::configure(bool enabled, int intervalMs, QString captureDirectory,
@@ -120,8 +148,46 @@ bool ScreenCapture::clearCaptures(QString* errorMessage) const
 
 void ScreenCapture::captureOnTimer()
 {
-    QString error;
-    if (!captureNow(&error, CaptureTrigger::Scheduled)) emit captureFailed(error);
+    captureScheduledAsync();
+}
+
+void ScreenCapture::captureScheduledAsync()
+{
+    if (preprocessingActive_) return;
+    QScreen* screen = QGuiApplication::primaryScreen();
+    if (screen == nullptr) { emit captureFailed(QStringLiteral("当前没有可用的显示器")); return; }
+    QElapsedTimer elapsed; elapsed.start();
+    const QPixmap pixmap = screen->grabWindow(0);
+    if (pixmap.isNull()) { emit captureFailed(QStringLiteral("无法获取屏幕图像")); return; }
+    const QImage sourceImage = pixmap.toImage();
+    const ImageCompressionOptions options = options_;
+    const QDateTime capturedAt = QDateTime::currentDateTimeUtc();
+    const QString captureId = QUuid::createUuid().toString(QUuid::Id128);
+    const int captureDuration = static_cast<int>(elapsed.elapsed());
+    const QString appHint = foregroundWindowHint();
+    preprocessingActive_ = true;
+    const QPointer<ScreenCapture> guard(this);
+    preprocessing_.submit([guard, sourceImage, options, capturedAt, captureId, captureDuration, appHint](const std::shared_ptr<CancellationToken>& token) {
+        CapturedImage result; QString error; QString format;
+        result.captureId=captureId; result.capturedAt=capturedAt; result.trigger=CaptureTrigger::Scheduled;
+        result.source=QStringLiteral("primary_screen"); result.durationMs=captureDuration;
+        result.appHint=appHint;
+        if (!token->isCancellationRequested()) result.fingerprint=ScreenFingerprint::create(sourceImage);
+        const bool ok=!token->isCancellationRequested() && ImageCompressor::compress(
+            sourceImage,options,&result.data,&format,&result.size,&error);
+        result.format=format;
+        if (guard.isNull()) return;
+        QMetaObject::invokeMethod(guard, [guard, result, error, ok]() {
+            if (guard.isNull()) return; guard->preprocessingActive_=false;
+            if (ok) emit guard->captured(result); else if (!error.isEmpty()) emit guard->captureFailed(error);
+        }, Qt::QueuedConnection);
+    }, [guard](std::exception_ptr) {
+        if (guard.isNull()) return;
+        QMetaObject::invokeMethod(guard, [guard]() {
+            if (guard.isNull()) return; guard->preprocessingActive_=false;
+            emit guard->captureFailed(QStringLiteral("截图后台处理失败"));
+        }, Qt::QueuedConnection);
+    });
 }
 
 bool ScreenCapture::captureInternal(CapturedImage* output, QString* errorMessage,
@@ -131,6 +197,7 @@ bool ScreenCapture::captureInternal(CapturedImage* output, QString* errorMessage
         if (errorMessage) *errorMessage = QStringLiteral("截图输出不能为空");
         return false;
     }
+    QElapsedTimer elapsed; elapsed.start();
     QScreen* screen = QGuiApplication::primaryScreen();
     if (screen == nullptr) {
         if (errorMessage) *errorMessage = QStringLiteral("当前没有可用的显示器");
@@ -143,8 +210,10 @@ bool ScreenCapture::captureInternal(CapturedImage* output, QString* errorMessage
     }
     const QImage sourceImage = pixmap.toImage();
     CapturedImage result;
+    result.captureId = QUuid::createUuid().toString(QUuid::Id128);
     result.capturedAt = QDateTime::currentDateTimeUtc();
     result.trigger = trigger;
+    result.appHint = foregroundWindowHint();
     result.fingerprint = ScreenFingerprint::create(sourceImage);
     QString actualFormat;
     QString compressionError;
@@ -154,6 +223,7 @@ bool ScreenCapture::captureInternal(CapturedImage* output, QString* errorMessage
         return false;
     }
     result.format = actualFormat;
+    result.durationMs = static_cast<int>(elapsed.elapsed());
     if (persistToDisk && !captureDirectory_.isEmpty()) {
         if (!QDir().mkpath(captureDirectory_)) {
             if (errorMessage) *errorMessage = QStringLiteral("无法创建截图目录: %1")

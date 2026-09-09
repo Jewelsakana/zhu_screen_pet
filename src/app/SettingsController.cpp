@@ -167,6 +167,44 @@ void SettingsController::cancelActiveChat()
     if (chatController_ != nullptr) chatController_->cancelAll();
 }
 
+QVector<MemoryItem> SettingsController::memories(const QString& kind, const QString& query,
+                                                 AppError* error) const
+{
+    if (memory_ == nullptr) {
+        if (error) *error = makeError(AppErrorCode::NotReady, QStringLiteral("记忆服务暂不可用"),
+                                      QStringLiteral("memory orchestrator is unavailable"), QStringLiteral("memory.list"));
+        return {};
+    }
+    QString technical; const QVector<MemoryItem> result = memory_->listMemories(kind, query, 1000, &technical);
+    if (!technical.isEmpty() && error) *error = makeError(AppErrorCode::DatabaseQuery,
+        QStringLiteral("无法读取记忆列表"), technical, QStringLiteral("memory.list"));
+    return result;
+}
+
+bool SettingsController::updateMemory(const MemoryItem& item, AppError* error)
+{
+    QString technical;
+    if (memory_ != nullptr && memory_->updateMemory(item, &technical)) return true;
+    return fail(makeError(AppErrorCode::DatabaseQuery, QStringLiteral("无法更新记忆"), technical,
+                          QStringLiteral("memory.update")), error);
+}
+
+bool SettingsController::deleteMemory(qint64 id, AppError* error)
+{
+    QString technical;
+    if (memory_ != nullptr && memory_->removeMemory(id, &technical)) return true;
+    return fail(makeError(AppErrorCode::DatabaseQuery, QStringLiteral("无法删除记忆"), technical,
+                          QStringLiteral("memory.delete")), error);
+}
+
+bool SettingsController::clearMemories(const QString& kind, AppError* error)
+{
+    QString technical;
+    if (memory_ != nullptr && memory_->clearMemoryKind(kind, &technical)) return true;
+    return fail(makeError(AppErrorCode::DatabaseQuery, QStringLiteral("无法清空记忆"), technical,
+                          QStringLiteral("memory.clear")), error);
+}
+
 void SettingsController::finishConnectionTest(const QString& requestId, const ChatResult& result)
 {
     Q_UNUSED(requestId);

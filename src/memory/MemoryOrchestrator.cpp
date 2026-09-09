@@ -21,6 +21,10 @@ MemoryLimits MemoryLimits::normalized() const
     result.relevantHistoryLimit = std::max(0, result.relevantHistoryLimit);
     result.longTermMemoryLimit = std::max(0, result.longTermMemoryLimit);
     result.maxContextTokens = std::max(1, result.maxContextTokens);
+    result.summaryMessageThreshold = std::max(MemoryLimits::MinimumSummaryMessages,
+                                               result.summaryMessageThreshold);
+    result.summaryTokenThreshold = std::max(MemoryLimits::MinimumSummaryTokens,
+                                             result.summaryTokenThreshold);
     return result;
 }
 
@@ -33,9 +37,13 @@ bool MemoryLimits::validate(QString* errorMessage) const
         || longTermMemoryLimit < MinimumRetrievedItems
         || longTermMemoryLimit > MaximumRetrievedItems
         || maxContextTokens < MinimumContextTokens
-        || maxContextTokens > MaximumContextTokens) {
+        || maxContextTokens > MaximumContextTokens
+        || summaryMessageThreshold < MinimumSummaryMessages
+        || summaryMessageThreshold > MaximumSummaryMessages
+        || summaryTokenThreshold < MinimumSummaryTokens
+        || summaryTokenThreshold > MaximumSummaryTokens) {
         if (errorMessage) *errorMessage = QStringLiteral(
-            "memory limits are out of range (recent 1..1000, related/long-term 0..100, tokens 1..128000)");
+            "memory limits are out of range (recent/summary 1..1000, related/long-term 0..100, tokens 1..128000)");
         return false;
     }
     return true;
@@ -90,6 +98,26 @@ MemoryContext MemoryOrchestrator::buildContext(const ContextRequest& request,
         usedTokens += tokens;
     }
 
+    Message conversationSummaryMessage;
+    bool hasConversationSummary = false;
+    if (memories_ != nullptr) {
+        QString summaryError;
+        const std::optional<MemoryItem> summary = memories_->conversationSummary(
+            request.conversationId, &summaryError);
+        if (!summaryError.isEmpty()) {
+            if (errorMessage) *errorMessage = summaryError;
+            return {};
+        }
+        if (summary.has_value()) {
+            const QString content = QStringLiteral("[不可信会话摘要] %1").arg(summary->content);
+            const int tokens = estimateTokens(content);
+            if (usedTokens + tokens <= maxTokens) {
+                conversationSummaryMessage = Message::create(MessageRole::User, content);
+                hasConversationSummary = true; usedTokens += tokens;
+            } else context.truncated = true;
+        }
+    }
+
     Message latestObservationMessage;
     bool hasLatestObservation = false;
     if (request.includeLatestObservation && observations_ != nullptr) {
@@ -128,13 +156,14 @@ MemoryContext MemoryOrchestrator::buildContext(const ContextRequest& request,
         }
     }
 
-    const auto recentResult = conversations_->recentMessagesResult(request.conversationId, maxMessages);
+    const auto recentResult = conversations_->unsummarizedMessagesResult(request.conversationId, 1000);
     if (!recentResult) {
         if (errorMessage) *errorMessage = recentResult.error().technicalMessage.isEmpty()
             ? recentResult.error().message : recentResult.error().technicalMessage;
         return {};
     }
-    const QVector<ConversationMessage> recent = recentResult.value();
+    QVector<ConversationMessage> recent = recentResult.value();
+    if (recent.size() > maxMessages) recent = recent.mid(recent.size() - maxMessages);
 
     std::vector<Message> selectedRecent;
     selectedRecent.reserve(static_cast<std::size_t>(recent.size()));
@@ -194,11 +223,13 @@ MemoryContext MemoryOrchestrator::buildContext(const ContextRequest& request,
             return content.simplified().toCaseFolded();
         };
         QSet<QString> seenContent;
+        if (hasConversationSummary) seenContent.insert(canonical(conversationSummaryMessage.content));
         for (const Message& message : selectedRecent) {
             seenContent.insert(canonical(message.content));
         }
         for (const ConversationMessage& item : related) {
             if (context.relatedHistory.size() >= relatedLimit) break;
+            if (item.conversationId == request.conversationId && item.summarizedAt.isValid()) continue;
             const QString key = canonical(item.message.content);
             const QString content = QStringLiteral(
                 "[不可信历史引用][会话 %1][原角色 %2] %3")
@@ -215,6 +246,7 @@ MemoryContext MemoryOrchestrator::buildContext(const ContextRequest& request,
             usedTokens += tokens;
         }
         for (const MemoryItem& item : longTerm) {
+            if (item.category == QStringLiteral("conversation_summary")) continue;
             if (context.relatedMemories.size() >= longTermLimit) break;
             const QString content = QStringLiteral("[不可信长期记忆引用] %1").arg(item.content);
             const QString key = canonical(item.content);
@@ -231,6 +263,7 @@ MemoryContext MemoryOrchestrator::buildContext(const ContextRequest& request,
     }
 
     context.messages = request.leadingMessages;
+    if (hasConversationSummary) context.messages.push_back(conversationSummaryMessage);
     context.messages.insert(context.messages.end(), selectedRecent.begin(),
                             selectedRecent.end());
     context.messages.insert(context.messages.end(), relatedMessages.begin(), relatedMessages.end());
@@ -286,9 +319,95 @@ QVector<MemoryItem> MemoryOrchestrator::retrieveRelevant(const QString& query, i
 
 bool MemoryOrchestrator::summarizeIfNeeded(const QString& conversationId, QString* errorMessage)
 {
-    Q_UNUSED(conversationId);
-    Q_UNUSED(errorMessage);
-    return true;
+    const QVector<ConversationMessage> pending = unsummarizedMessages(conversationId, 1000, errorMessage);
+    if (errorMessage != nullptr && !errorMessage->isEmpty()) return false;
+    int tokens = 0;
+    for (const ConversationMessage& message : pending) {
+        tokens += message.tokenCount > 0 ? message.tokenCount : estimateTokens(message.message.content);
+    }
+    return pending.size() >= limits_.summaryMessageThreshold || tokens >= limits_.summaryTokenThreshold;
+}
+
+QVector<ConversationMessage> MemoryOrchestrator::unsummarizedMessages(
+    const QString& conversationId, int limit, QString* errorMessage) const
+{
+    return conversations_ == nullptr ? QVector<ConversationMessage>{}
+        : conversations_->unsummarizedMessages(conversationId, limit, errorMessage);
+}
+
+bool MemoryOrchestrator::markMessagesSummarized(const QVector<qint64>& messageIds,
+                                                const QDateTime& summarizedAt,
+                                                QString* errorMessage)
+{
+    return conversations_ != nullptr && conversations_->markMessagesSummarized(
+        messageIds, summarizedAt, errorMessage);
+}
+
+bool MemoryOrchestrator::saveExtractedFact(const QString& content, const QString& category,
+                                           double confidence, double importance,
+                                           const QString& sourceReference,
+                                           QString* errorMessage)
+{
+    if (memories_ == nullptr) return false;
+    MemoryItem item; item.kind = QStringLiteral("long_term"); item.content = content;
+    item.category = category; item.confidence = confidence; item.importance = importance;
+    item.sourceKind = QStringLiteral("conversation"); item.sourceReference = sourceReference;
+    return memories_->upsertLongTerm(item, errorMessage) > 0;
+}
+
+bool MemoryOrchestrator::clearMemoryKind(const QString& kind, QString* errorMessage)
+{
+    return memories_ != nullptr && memories_->clearKind(kind, errorMessage);
+}
+
+int MemoryOrchestrator::cleanupShortTermMemories(QString* errorMessage)
+{
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    int removed = 0;
+    if (memories_ != nullptr) {
+        const int count = memories_->cleanupShortTerm(
+            now, MemoryLimits::MaximumShortTermItems, errorMessage);
+        if (count < 0) return -1;
+        removed += count;
+    }
+    if (conversations_ != nullptr) {
+        const int count = conversations_->removeSummarizedBefore(
+            now.addSecs(-MemoryLimits::ShortTermRetentionSeconds), errorMessage);
+        if (count < 0) return -1;
+        removed += count;
+    }
+    return removed;
+}
+
+QVector<MemoryItem> MemoryOrchestrator::listMemories(const QString& kind, const QString& query,
+                                                     int limit, QString* errorMessage) const
+{
+    if (memories_ == nullptr) return {};
+    if (kind == QStringLiteral("short_term")) return memories_->searchShortTerm(query, limit, errorMessage);
+    if (kind == QStringLiteral("long_term")) return memories_->searchLongTerm(query, limit, errorMessage);
+    return memories_->search(query, limit, errorMessage);
+}
+
+MemoryItem MemoryOrchestrator::getMemory(qint64 id, QString* errorMessage) const
+{
+    return memories_ == nullptr ? MemoryItem{} : memories_->get(id, errorMessage);
+}
+
+bool MemoryOrchestrator::updateMemory(const MemoryItem& item, QString* errorMessage)
+{
+    return memories_ != nullptr && memories_->upsertLongTerm(item, errorMessage) > 0;
+}
+
+bool MemoryOrchestrator::removeMemory(qint64 id, QString* errorMessage)
+{
+    return memories_ != nullptr && memories_->remove(id, errorMessage);
+}
+
+std::optional<MemoryItem> MemoryOrchestrator::conversationSummary(
+    const QString& conversationId, QString* errorMessage) const
+{
+    return memories_ == nullptr ? std::optional<MemoryItem>{}
+                                : memories_->conversationSummary(conversationId, errorMessage);
 }
 
 int MemoryOrchestrator::estimateTokens(const QString& text)

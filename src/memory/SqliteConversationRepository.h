@@ -21,6 +21,11 @@ public:
                                      int tokenCount = 0) override;
     Result<QVector<ConversationMessage>> recentMessagesResult(
         const QString& conversationId, int limit) const override;
+    Result<QVector<ConversationMessage>> unsummarizedMessagesResult(
+        const QString& conversationId, int limit) const override;
+    Result<void> markMessagesSummarizedResult(
+        const QVector<qint64>& messageIds, const QDateTime& summarizedAt) override;
+    Result<int> removeSummarizedBeforeResult(const QDateTime& cutoff) override;
 
 private:
     Database* database_ = nullptr;

@@ -56,6 +56,8 @@ private:
     QSpinBox* relevantLimit_ = nullptr;
     QSpinBox* longTermLimit_ = nullptr;
     QSpinBox* contextTokens_ = nullptr;
+    QSpinBox* summaryMessageThreshold_ = nullptr;
+    QSpinBox* summaryTokenThreshold_ = nullptr;
     QSpinBox* bubbleDurationSeconds_ = nullptr;
     QSpinBox* windowScalePercent_ = nullptr;
     QCheckBox* screenCaptureEnabled_ = nullptr;

@@ -5,8 +5,11 @@
 #include <QJsonObject>
 #include <QTimer>
 #include <QUuid>
+#include <QImage>
 
 #include <utility>
+
+#include "infrastructure/ImageCompressor.h"
 
 namespace zhu_screen_pet {
 
@@ -249,6 +252,68 @@ QByteArray OpenAICompatibleProvider::buildRequestBody(const PendingRequest& requ
     return QJsonDocument(root).toJson(QJsonDocument::Compact);
 }
 
+bool OpenAICompatibleProvider::prepareRequestBody(PendingRequest& request,
+                                                  QByteArray* body,
+                                                  QString* errorMessage) const
+{
+    if (body == nullptr) {
+        if (errorMessage) *errorMessage = QStringLiteral("request body output is null");
+        return false;
+    }
+    *body = buildRequestBody(request);
+    if (body->size() <= MaximumRequestBodyBytes) return true;
+
+    // 视觉请求使用 Base64 后体积会明显膨胀。尝试从已压缩附件解码，
+    // 逐级降低宽度和质量；文本请求没有可压缩的输入，直接拒绝。
+    bool foundImage = false;
+    for (Message& message : request.messages) {
+        if (!message.hasImage()) continue;
+        foundImage = true;
+        QImage source = QImage::fromData(message.image.data);
+        if (source.isNull()) continue;
+
+        const int originalWidth = message.image.size.width() > 0
+            ? message.image.size.width() : source.width();
+        const QString requestedFormat = message.image.mimeType.toLower().contains(
+            QStringLiteral("webp")) ? QStringLiteral("webp") : QStringLiteral("jpeg");
+        const QVector<int> widths = {
+            qMin(originalWidth, 2048), qMin(originalWidth, 1600),
+            qMin(originalWidth, 1280), qMin(originalWidth, 1024),
+            qMin(originalWidth, 768), qMin(originalWidth, 640), 480};
+        const QVector<int> qualities = {65, 50, 35, 25};
+        for (const int width : widths) {
+            if (width < 1) continue;
+            for (const int quality : qualities) {
+                ImageCompressionOptions options;
+                options.format = requestedFormat;
+                options.maxWidth = width;
+                options.quality = quality;
+                QByteArray compressed;
+                QString actualFormat;
+                QSize outputSize;
+                if (!ImageCompressor::compress(source, options, &compressed,
+                                               &actualFormat, &outputSize, nullptr)) {
+                    continue;
+                }
+                if (compressed.size() >= message.image.data.size()) continue;
+                message.image.data = std::move(compressed);
+                message.image.size = outputSize;
+                message.image.mimeType = actualFormat == QStringLiteral("webp")
+                    ? QStringLiteral("image/webp") : QStringLiteral("image/jpeg");
+                *body = buildRequestBody(request);
+                if (body->size() <= MaximumRequestBodyBytes) return true;
+            }
+        }
+    }
+
+    if (errorMessage) {
+        *errorMessage = foundImage
+            ? QStringLiteral("视觉请求体超过 8 MiB，自动压缩后仍无法满足限制")
+            : QStringLiteral("模型请求体超过 8 MiB");
+    }
+    return false;
+}
+
 void OpenAICompatibleProvider::sendAttempt(const QString& requestId)
 {
     const auto request = pendingRequests_.value(requestId);
@@ -263,6 +328,20 @@ void OpenAICompatibleProvider::sendAttempt(const QString& requestId)
         return;
     }
 
+    QByteArray requestBody;
+    QString bodyError;
+    if (!prepareRequestBody(*request, &requestBody, &bodyError)) {
+        const ModelError error{ModelErrorCode::InvalidRequest, bodyError, 0,
+                               ErrorDomain::Model, bodyError,
+                               QStringLiteral("model.build_request"), {}, false};
+        // startChat 必须先把 requestId 返回给应用层，避免同步完成信号早于
+        // ChatController 注册 pending 请求。
+        QTimer::singleShot(0, this, [this, requestId, error]() {
+            finishFailure(requestId, error);
+        });
+        return;
+    }
+
     ++request->attempts;
     const QList<QPair<QByteArray, QByteArray>> headers = {
         {QByteArrayLiteral("Authorization"),
@@ -271,7 +350,7 @@ void OpenAICompatibleProvider::sendAttempt(const QString& requestId)
             ? QByteArrayLiteral("text/event-stream") : QByteArrayLiteral("application/json")}
     };
     request->transportRequestId = httpClient_->postJson(
-        completionUrl(), buildRequestBody(*request), headers, config_.timeoutMs,
+        completionUrl(), requestBody, headers, config_.timeoutMs,
         !request->stream);
     transportToRequest_.insert(request->transportRequestId, requestId);
 

@@ -1,127 +1,177 @@
 # 小珠看着你
 
-使用 C++17、Qt 6 和 CMake 构建的屏幕桌宠项目。当前已完成聊天 MVP。
+一个使用 C++17、Qt 6 和 CMake 开发的 Windows 屏幕桌宠。项目目前达到
+**v0.1.0 首个可用便携版**状态：可以解压运行、离线体验，也可以配置兼容
+OpenAI Chat Completions 的远程文本或视觉模型。
 
-## 构建
+> 当前版本适合首轮发布和小范围使用。尚未提供安装器、自动更新和代码签名，
+> Windows SmartScreen 可能会对未签名程序显示提醒。
 
-Qt 和编译器必须匹配。当前工程使用 Qt 6 的 MSVC 版本，因此请在 **x64 Native Tools Command Prompt for VS** 中执行：
+## 功能
+
+### 桌宠与交互
+
+- 透明置顶桌宠、系统托盘、可拖动和等比例缩放。
+- 自动隐藏的操作栏和聊天输入栏，附属窗口会跟随桌宠移动并在屏幕边缘换位。
+- 流式回复气泡、完成后自动关闭、悬停暂停、手动关闭和长内容滚动。
+- 根据本地时间显示启动问候，称呼取自设置中的“对你的称呼”。
+- 空闲状态每分钟随机切换，思考、回复、错误状态会优先显示。
+- 0–100 级在线挂机等级，圆环显示进度；每分钟刷新、每 5 分钟及退出时保存，
+  离线期间不增长。
+
+### 聊天与模型
+
+- 默认提供 Mock 模型，无需网络或 API Key 即可体验聊天闭环。
+- 支持 OpenAI-compatible 和 DeepSeek 配置、流式/非流式响应、取消、超时、
+  重试和错误分类。
+- 支持在设置中切换模型、测试连接并保存 API Key。
+- API Key 保存到 Windows Credential Manager，不写入 JSON 配置、SQLite 或日志。
+
+### 屏幕视觉
+
+- 支持定时截图、手动截图和随本次用户消息附带截图。
+- 图片在发送前缩放压缩，并按照 OpenAI-compatible 的 Base64 `image_url` 格式提交。
+- 自动视觉请求具有画面去重、8 MiB 请求体限制、超限二次压缩、后台队列上限和
+  连续失败熔断。
+- 截图功能默认关闭；启用时会明确提醒截图将发送给当前配置的远程模型。
+
+### 会话与记忆
+
+- SQLite/WAL 保存会话、消息、短期记忆、长期记忆和屏幕观察摘要。
+- 会话历史支持滚动加载、切换、归档和永久删除。
+- 上下文按最近消息、相关历史、长期事实和最新观察组织，并受消息数和 Token
+  预算约束。
+- 消息达到条数或 Token 阈值后，后台生成滚动摘要并提取长期事实；失败时保留
+  原消息并延迟重试。
+- 长期事实支持分类、置信度/重要性过滤和精确去重。
+- 记忆管理界面支持搜索、分类过滤、查看来源、编辑、单条删除以及清空短期或
+  长期记忆。
+- 短期记忆默认保留 7 天、最多 1000 条；成功摘要后的旧原始消息按策略清理。
+
+## 普通用户使用
+
+### 系统要求
+
+- Windows 10/11 64 位。
+- 不需要单独安装 Qt、OpenSSL 或 Visual C++ 运行库；便携包已包含运行所需文件。
+- 使用远程模型时需要网络、对应服务的 API Key，以及支持所需输入类型的模型。
+
+### 开始使用
+
+1. 下载 `小珠看着你-v0.1.0-win64-portable.zip`。
+2. 将压缩包完整解压到一个可写目录，不要只取出 EXE。
+3. 运行 `小珠看着你.exe`。
+4. 默认 Mock 模型可以直接离线聊天。
+5. 如需远程模型，打开“设置”，选择或填写模型配置和 API Key，先测试连接，
+   再保存设置。
+6. 只有在确认当前模型支持图片输入并理解隐私风险后，才开启截图或随消息附图。
+
+用户数据不会写入便携包目录，而是保存在 Windows 用户应用数据目录中，通常为：
+
+```text
+%APPDATA%\zhu_screen_pet\zhu_screen_pet\
+├── config\
+├── database\
+├── logs\
+└── captures\
+```
+
+更换电脑时 API Key 不会随便携包迁移，需要重新配置。
+
+## 隐私说明
+
+- 普通会话、记忆和观察摘要保存在本机 SQLite 数据库。
+- API Key 保存在 Windows Credential Manager。
+- API Key、Authorization Header、原始截图和 Base64 图片不会写入应用日志。
+- 开启截图后，截图内容会发送给当前选择的远程模型服务；发送前请关闭或遮挡
+  隐私页面。
+- 当前版本不具备自动识别密码、聊天窗口、支付页面等敏感内容的能力。
+
+## 当前限制
+
+- 仅提供 Windows x64 便携版，没有安装器、卸载器、自动更新和代码签名。
+- 当前只捕获主显示器，不支持指定显示器、指定窗口或完整多屏工作流。
+- 没有本地视觉模型和 OCR，视觉能力取决于用户配置的远程模型。
+- 自动摘要和长期事实提取同样需要远程模型；Mock 模式不会执行模型摘要。
+- 当前只做精确去重，不包含向量检索、语义冲突合并或长期记忆版本历史。
+- 暂不提供数据库备份恢复和进程崩溃后的未完成请求恢复。
+- 自动化测试使用 Mock/本地模拟服务；不同远程服务的模型名称、限流和视觉格式
+  仍需用户按照服务商文档确认。
+
+## 从源码构建
+
+### 依赖
+
+- CMake 3.22 或更高版本。
+- Visual Studio 2022 C++ x64 工具链。
+- 与 MSVC 工具链匹配的 Qt 6.8，组件包括 Core、Gui、Widgets、Network、Sql、Test。
+- Ninja（使用下列命令时）。
+
+请在 **x64 Native Tools Command Prompt for VS 2022** 或已经加载 MSVC 环境的
+PowerShell 中执行。根据本机安装位置调整 `CMAKE_PREFIX_PATH`。
+
+### Debug
 
 ```powershell
 cmake -S . -B build -G Ninja `
+  -DCMAKE_BUILD_TYPE=Debug `
   -DCMAKE_PREFIX_PATH=D:/Qt/6.8.3/msvc2022_64 `
   -DZHU_SCREEN_PET_BUILD_TESTS=ON
-cmake --build build
+cmake --build build --parallel 4
 ctest --test-dir build --output-on-failure
 ```
 
-如果使用 Visual Studio 生成器，可以省略 `-G Ninja`，并在构建时指定配置：
-
-```powershell
-cmake -S . -B build-vs `
-  -DCMAKE_PREFIX_PATH=D:/Qt/6.8.3/msvc2022_64 `
-  -DZHU_SCREEN_PET_BUILD_TESTS=ON
-cmake --build build-vs --config Debug
-ctest --test-dir build-vs -C Debug --output-on-failure
-```
-
-## Release 发布
-
-Windows 便携发布包必须使用 Release 配置。配置并验证完成后，构建
-`zhu_screen_pet_portable` 目标：
+### Release
 
 ```powershell
 cmake -S . -B build-release -G Ninja `
   -DCMAKE_BUILD_TYPE=Release `
   -DCMAKE_PREFIX_PATH=D:/Qt/6.8.3/msvc2022_64 `
   -DZHU_SCREEN_PET_BUILD_TESTS=ON
-cmake --build build-release
+cmake --build build-release --parallel 4
 ctest --test-dir build-release --output-on-failure
-cmake --build build-release --target zhu_screen_pet_portable
 ```
 
-可发布目录生成在 `build-release/dist/Release/`。该目录包含主程序、默认
-JSON 配置、Qt 运行库与插件、OpenSSL 以及可再分发的 VC++ CRT DLL，整个目录一起复制
-到其他 64 位 Windows 电脑即可。API Key 保存在 Windows Credential Manager 中，
-换电脑后需要重新配置。
+## 生成便携发布包
 
-## 当前内容
+构建前先退出正在运行的 Release 程序，否则 Windows 会锁定 EXE，导致链接时报
+`LNK1104` 或 `LNK1168`。
 
-- 最小 Qt Widgets 应用和主窗口
-- C++17 与 CMake 配置
-- Qt 资源文件和运行时应用图标
-- Debug/Release 构建支持
-- 分离的 QtTest 主回归测试与旧数据迁移测试
-- 基础源码目录：`app`、`infrastructure`、`model`、`memory`、`ui`
-- Phase 1 基础服务：路径、JSONL 日志、QSettings、SQLite/WAL、后台任务、异步 HTTP、Windows 凭据存储接口、窗口位置管理和系统托盘
-- Phase 2 模型基础：异步 `ChatProvider`、Mock Provider、OpenAI-compatible Provider、DeepSeek Provider、JSON 解析、超时/重试/退避和模型日志
-- Phase 3 记忆层：SQLite 会话与消息持久化、记忆检索、最近上下文和 token 预算裁剪
-- 未完成：长期记忆的自动提取、会话摘要、去重和维护流程；当前仅具备存储与检索基础能力
-- Phase 4 聊天 MVP：历史恢复、输入发送、SSE 流式显示、取消、失败重试、复制回复、人格提示和桌宠状态
-- 屏幕视觉基础：定时/对话后截图、JPEG/WebP 压缩、Base64 内联多模态请求、单请求阻断、截图生命周期清理、桌宠窗口排除和 3% 屏幕指纹去重
-- 从旧 `ScreenPet/Screen Pet` 数据目录和 Credential service 幂等迁移配置、会话与密钥，迁移过程不覆盖新数据且保留旧数据
-
-应用随附的磁盘配置默认启用 Mock Provider，因此无需联网即可测试完整聊天闭环。
-真实 Provider 的 API Key 从 Windows Credential Manager 读取，不会写入 JSON 或日志。
-
-当前已支持把截图作为临时图片附件发送给兼容 OpenAI Chat Completions 的多模态模型。
-截图图片和 Base64 不写入 SQLite 或日志；自动截图结果作为有时效的 `observation_events`
-保存，不再占用普通聊天短期记忆。普通聊天只额外注入最新一条未过期的屏幕观察摘要。
-OCR 和透明桌宠动画仍属于后续阶段。启用截图发送前，请确保当前配置的是支持图片输入的模型。
-
-人格参数和模型错误提示同样由磁盘配置驱动，项目模板位于
-[app-settings.json](D:/zhu_screen_pet/config/app-settings.json)。
-
-## 模型配置
-
-模型创建采用 `ChatProviderFactory`，运行时切换由 `ProviderManager` 管理。所有 Provider
-参数来自 [model-providers.json](D:/zhu_screen_pet/config/model-providers.json)，例如：
-
-```json
-{
-  "version": 1,
-  "active_profile": "deepseek-chat",
-  "profiles": [
-    {
-      "id": "deepseek-chat",
-      "provider_type": "deepseek",
-      "display_name": "DeepSeek Vision",
-      "base_url": "https://api.deepseek.com",
-      "model": "deepseek-v4-flash-vision-exp",
-      "credential_service": "zhu_screen_pet",
-      "credential_account": "deepseek-api-key",
-      "timeout_ms": 30000,
-      "max_retries": 3,
-      "retry_base_delay_ms": 1000
-    }
-  ]
-}
+```powershell
+cmake --build build-release --target zhu_screen_pet_portable --parallel 4
 ```
 
-构建时该文件会复制到 `build/config/`。程序首次运行时再复制到用户应用数据目录的
-`config/model-providers.json`，后续读取和修改的都是用户目录中的文件。也可以通过环境变量
-`ZHU_SCREEN_PET_MODEL_CONFIG` 指定另一个配置文件。
+发布目录为：
 
-人格和提示文案使用同目录的 `app-settings.json`，也可以通过环境变量
-`ZHU_SCREEN_PET_APP_CONFIG` 指定外部文件。修改该文件后重启程序即可生效。
-该文件的 `memory` 段控制最近消息条数、相关历史条数、长期记忆条数和总上下文 token 预算。
-
-`app-settings.json` 的 `ui` 段支持替换外部外观资源：
-
-```json
-{
-  "ui": {
-    "app_icon_path": "assets/app-icon.png",
-    "pet_avatar_path": "assets/pet-avatar.png",
-    "conversation_avatar_path": "assets/history-avatar.png"
-  }
-}
+```text
+build-release/dist/Release/
 ```
 
-`app_icon_path` 控制运行时窗口和系统托盘图标，`pet_avatar_path` 控制桌宠主体，
-`conversation_avatar_path` 单独控制会话历史中的桌宠头像。可使用绝对路径，或使用相对于程序所在目录的路径；Windows 下推荐
-在 JSON 中使用 `D:/images/pet.png` 形式。路径为空或图片无法读取时，程序会回退到
-内置图标或默认文字形象。修改运行时配置后需重启程序。
+该目录包含主程序、默认配置、头像资源、Qt 运行库和插件、OpenSSL 以及 MSVC x64
+运行库。发布时必须压缩并发送目录内的全部内容：
 
-`ModelProviderConfig` 不补 URL、模型名或厂商默认值；磁盘配置缺少必填字段时会明确报错。
-API Key 使用 `credential_service + credential_account` 从 Windows Credential Manager 获取。
-`ProviderManager::switchProvider()` 仅在没有运行中请求时切换。
+```powershell
+Compress-Archive `
+  -Path ".\build-release\dist\Release\*" `
+  -DestinationPath ".\小珠看着你-v0.1.0-win64-portable.zip" `
+  -Force
+```
+
+`windeployqt` 如果提示缺少 `translations/catalogs.json`，在本项目使用
+`--no-translations` 的情况下不影响便携包运行。
+
+## 配置文件
+
+发布模板位于：
+
+- [config/model-providers.json](config/model-providers.json)：模型列表和当前配置。
+- [config/app-settings.json](config/app-settings.json)：人格、记忆阈值、界面和截图设置。
+
+首次运行时，程序会将缺少的模板复制到用户应用数据目录。后续设置修改的是用户
+目录中的配置，不会修改便携包模板。
+
+模型 JSON 只保存 Credential Manager 的 service/account 标识，不允许保存
+`api_key` 或 `token` 字段。也可以用以下环境变量指定外部配置：
+
+- `ZHU_SCREEN_PET_MODEL_CONFIG`
+- `ZHU_SCREEN_PET_APP_CONFIG`

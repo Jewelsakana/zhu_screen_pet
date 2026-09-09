@@ -75,6 +75,10 @@ bool AppConfigRepository::load(PersonaConfig* persona,
         QStringLiteral("long_term_memory_limit")).toInt(-1);
     loadedLimits.maxContextTokens = memoryObject.value(
         QStringLiteral("max_context_tokens")).toInt();
+    loadedLimits.summaryMessageThreshold = memoryObject.value(
+        QStringLiteral("summary_message_threshold")).toInt(20);
+    loadedLimits.summaryTokenThreshold = memoryObject.value(
+        QStringLiteral("summary_token_threshold")).toInt(4000);
     if (!loadedLimits.validate(errorMessage)) return false;
 
     const QStringList requiredErrorCodes = {
@@ -196,6 +200,8 @@ bool AppConfigRepository::save(const PersonaConfig& source, const MemoryLimits& 
     memoryObject.insert(QStringLiteral("relevant_history_limit"), limits.relevantHistoryLimit);
     memoryObject.insert(QStringLiteral("long_term_memory_limit"), limits.longTermMemoryLimit);
     memoryObject.insert(QStringLiteral("max_context_tokens"), limits.maxContextTokens);
+    memoryObject.insert(QStringLiteral("summary_message_threshold"), limits.summaryMessageThreshold);
+    memoryObject.insert(QStringLiteral("summary_token_threshold"), limits.summaryTokenThreshold);
     root.insert(QStringLiteral("memory"), memoryObject);
     if (uiConfig != nullptr) {
         const UiConfig normalizedUi = uiConfig->normalized();

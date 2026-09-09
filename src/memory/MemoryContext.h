@@ -12,17 +12,25 @@ namespace zhu_screen_pet {
 /** 记忆上下文的条数和 token 配额；由 app-settings.json 配置。 */
 struct MemoryLimits
 {
+    static constexpr int ShortTermRetentionSeconds = 7 * 24 * 60 * 60;
+    static constexpr int MaximumShortTermItems = 1000;
     static constexpr int MinimumRecentMessages = 1;
     static constexpr int MaximumRecentMessages = 1000;
     static constexpr int MinimumRetrievedItems = 0;
     static constexpr int MaximumRetrievedItems = 100;
     static constexpr int MinimumContextTokens = 1;
     static constexpr int MaximumContextTokens = 128000;
+    static constexpr int MinimumSummaryMessages = 4;
+    static constexpr int MaximumSummaryMessages = 1000;
+    static constexpr int MinimumSummaryTokens = 256;
+    static constexpr int MaximumSummaryTokens = 128000;
 
     int recentMessageLimit = 20;
     int relevantHistoryLimit = 5;
     int longTermMemoryLimit = 5;
     int maxContextTokens = 8000;
+    int summaryMessageThreshold = 20;
+    int summaryTokenThreshold = 4000;
 
     MemoryLimits normalized() const;
     bool validate(QString* errorMessage = nullptr) const;

@@ -13,6 +13,16 @@ qint64 MemoryRepository::saveLongTerm(const QString& c,const QString& s,QString*
 { const auto r=saveLongTermResult(c,s); if(!r)copyError(r.error(),e); return r?r.value():0; }
 bool MemoryRepository::remove(qint64 id,QString* e)
 { const auto r=removeResult(id); if(!r)copyError(r.error(),e); return r.succeeded(); }
+bool MemoryRepository::clearKind(const QString& kind,QString* e)
+{ const auto r=clearKindResult(kind); if(!r)copyError(r.error(),e); return r.succeeded(); }
+int MemoryRepository::cleanupShortTerm(const QDateTime& now,int maxItems,QString* e)
+{ const auto r=cleanupShortTermResult(now,maxItems); if(!r)copyError(r.error(),e); return r?r.value():-1; }
+MemoryItem MemoryRepository::get(qint64 id,QString* e) const
+{ const auto r=getResult(id); if(!r)copyError(r.error(),e); return r?r.value():MemoryItem{}; }
+qint64 MemoryRepository::upsertLongTerm(const MemoryItem& item,QString* e)
+{ const auto r=upsertLongTermResult(item); if(!r)copyError(r.error(),e); return r?r.value():0; }
+std::optional<MemoryItem> MemoryRepository::conversationSummary(const QString& id,QString* e) const
+{ const auto r=conversationSummaryResult(id); if(!r)copyError(r.error(),e); return r?r.value():std::optional<MemoryItem>{}; }
 QVector<MemoryItem> MemoryRepository::search(const QString& q,int l,QString* e) const
 { const auto r=searchResult(q,l); if(!r)copyError(r.error(),e); return r?r.value():QVector<MemoryItem>{}; }
 QVector<ConversationMessage> MemoryRepository::searchConversationMessages(const QString& q,int l,QString* e) const

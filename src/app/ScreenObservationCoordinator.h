@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QDateTime>
 
 #include "app/UiConfig.h"
 #include "core/AppError.h"
@@ -28,7 +29,10 @@ public:
     void setBusy(bool busy);
     void shutdown();
     bool captureForChat(CapturedImage* image, AppError* error = nullptr);
-    void finishScheduledRequest();
+    /** 完成一次自动视觉请求；失败会累计并在达到阈值后触发熔断。 */
+    void finishScheduledRequest(bool succeeded = true);
+    bool automaticCircuitOpen() const;
+    int scheduledQueueDepth() const;
 
 signals:
     void scheduledImageReady(const CapturedImage& image);
@@ -38,6 +42,7 @@ private:
     void onCaptured(const CapturedImage& image);
     void updateTimer();
     void report(const QString& detail, const QString& operation);
+    void recordAutomaticFailure(const QString& detail);
 
     ScreenCapture* capture_ = nullptr;
     UiConfig config_;
@@ -47,6 +52,9 @@ private:
     bool observationReady_ = false;
     bool busy_ = false;
     bool shutDown_ = false;
+    int scheduledQueueDepth_ = 0;
+    int consecutiveFailures_ = 0;
+    QDateTime circuitOpenUntil_;
 };
 
 } // namespace zhu_screen_pet

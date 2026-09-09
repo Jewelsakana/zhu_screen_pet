@@ -33,6 +33,7 @@
 #include "ui/ConversationWindow.h"
 #include "ui/ErrorBannerWindow.h"
 #include "ui/HoverRevealController.h"
+#include "ui/LevelProgressWidget.h"
 #include "ui/MainWindow.h"
 #include "ui/PetWindowResizeController.h"
 #include "ui/ReplyBubbleWindow.h"
@@ -362,7 +363,7 @@ private slots:
         QVERIFY(bubble.isVisible());
         QVERIFY(bubble.findChild<QPushButton*>(QStringLiteral("replyBubbleExpand")) == nullptr);
         QVERIFY(bubble.styleSheet().contains(QStringLiteral("background:transparent")));
-        QVERIFY(bubble.styleSheet().contains(QStringLiteral("border-radius:24px")));
+        QVERIFY(bubble.findChild<QWidget*>(QStringLiteral("replyBubbleCard")) != nullptr);
         auto* tail = bubble.findChild<QWidget*>(QStringLiteral("replyBubbleTail"));
         QVERIFY(tail != nullptr);
         QCOMPARE(tail->property("pointsRight").toBool(), true);
@@ -373,6 +374,41 @@ private slots:
         QVERIFY(close != nullptr);
         close->click();
         QVERIFY(!bubble.isVisible());
+    }
+
+    void replyBubbleShrinksAfterLongContentAndUsesAvailableWidth()
+    {
+        ReplyBubbleWindow bubble;
+        bubble.show();
+        QTest::qWait(20);
+        auto* content = bubble.findChild<QTextBrowser*>(
+            QStringLiteral("replyBubbleContent"));
+        QVERIFY(content != nullptr);
+
+        bubble.beginReply();
+        bubble.finishReply(QString(600, QChar(0x957F)));
+        QCoreApplication::processEvents();
+        const int longContentHeight = content->height();
+        const int longWindowHeight = bubble.height();
+
+        bubble.beginReply();
+        bubble.finishReply(QStringLiteral("你好，我已经收到你的消息了。"));
+        QCoreApplication::processEvents();
+        QVERIFY(content->document()->textWidth() >= 250.0);
+        QVERIFY(content->height() < longContentHeight);
+        QVERIFY(bubble.height() < longWindowHeight);
+        QVERIFY(content->alignment().testFlag(Qt::AlignLeft));
+        auto* close = bubble.findChild<QPushButton*>(QStringLiteral("replyBubbleClose"));
+        QVERIFY(close != nullptr);
+        // 正文与关闭按钮从同一顶部区域开始，不再被按钮所在的空白行下推。
+        QVERIFY(content->geometry().top() <= close->geometry().bottom());
+        auto* card = bubble.findChild<QWidget*>(QStringLiteral("replyBubbleCard"));
+        QVERIFY(card != nullptr);
+        const QImage cardImage = card->grab().toImage().convertToFormat(
+            QImage::Format_ARGB32_Premultiplied);
+        QVERIFY(cardImage.pixelColor(0, 0).alpha() < 32);
+        QVERIFY(cardImage.pixelColor(cardImage.width() / 2,
+                                     cardImage.height() / 2).alpha() > 200);
     }
 
     void errorBannerPersistsAndReplacesOnlyUserMessage()
@@ -409,6 +445,11 @@ private slots:
         QVERIFY(window.findChild<ChatInputPanel*>(QStringLiteral("chatInputPanel")) != nullptr);
         QVERIFY(window.findChild<ReplyBubbleWindow*>(QStringLiteral("replyBubble")) != nullptr);
         QVERIFY(window.findChild<ErrorBannerWindow*>(QStringLiteral("errorBanner")) != nullptr);
+        auto* level = window.findChild<LevelProgressWidget*>(
+            QStringLiteral("levelProgress"));
+        QVERIFY(level != nullptr);
+        QCOMPARE(level->level(), 0);
+        QCOMPARE(level->progressPercent(), 0);
         auto* conversations = window.conversationWindow();
         QVERIFY(conversations != nullptr);
 
@@ -525,7 +566,7 @@ private slots:
 
         QVERIFY(bubble->testAttribute(Qt::WA_TranslucentBackground));
         QVERIFY(bubble->styleSheet().contains(QStringLiteral("background:transparent")));
-        QVERIFY(bubble->styleSheet().contains(QStringLiteral("#fffaf0")));
+        QVERIFY(bubble->findChild<QWidget*>(QStringLiteral("replyBubbleCard")) != nullptr);
         QVERIFY(!error->testAttribute(Qt::WA_TranslucentBackground));
         QVERIFY(error->styleSheet().contains(QStringLiteral("#fffaf0")));
 

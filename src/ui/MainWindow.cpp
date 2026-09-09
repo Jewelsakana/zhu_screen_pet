@@ -25,6 +25,7 @@
 #include "app/ErrorCenter.h"
 #include "app/SettingsController.h"
 #include "app/ScreenObservationCoordinator.h"
+#include "app/PetLifecycleController.h"
 #include "infrastructure/DesktopWindowPolicy.h"
 #include "infrastructure/ScreenCapture.h"
 #include "infrastructure/WindowAttachmentManager.h"
@@ -37,6 +38,7 @@
 #include "ui/ErrorBannerWindow.h"
 #include "ui/HoverRevealController.h"
 #include "ui/PetWindowResizeController.h"
+#include "ui/LevelProgressWidget.h"
 #include "ui/ReplyBubbleWindow.h"
 #include "ui/SettingsDialog.h"
 #include "ui/UiScaleMetrics.h"
@@ -72,6 +74,9 @@ MainWindow::MainWindow(QWidget* parent)
         "border-radius:72px;} QLabel{color:white;background:transparent;}"));
     auto* layout = new QVBoxLayout(surface);
     layout->setContentsMargins(24, 24, 24, 20);
+    levelProgress_ = new LevelProgressWidget(surface);
+    levelProgress_->setFixedSize(66, 66);
+    layout->addWidget(levelProgress_, 0, Qt::AlignHCenter);
     petVisual_ = new QLabel(QStringLiteral("ʕ •ᴥ• ʔ\n\n小 屏"), surface);
     petVisual_->setObjectName(QStringLiteral("petVisual"));
     petVisual_->setAlignment(Qt::AlignCenter);
@@ -88,6 +93,13 @@ MainWindow::MainWindow(QWidget* parent)
     stateLabel_->setAttribute(Qt::WA_TransparentForMouseEvents);
     layout->addWidget(petVisual_, 1);
     layout->addWidget(stateLabel_);
+    levelUpTimer_ = new QTimer(this);
+    levelUpTimer_->setSingleShot(true);
+    connect(levelUpTimer_, &QTimer::timeout, this, [this]() {
+        showingLevelUp_ = false;
+        stateLabel_->setStyleSheet(QString{});
+        refreshStateLabel();
+    });
     setCentralWidget(surface);
     setMouseTracking(true);
     surface->setMouseTracking(true);
@@ -366,6 +378,31 @@ void MainWindow::applyUiConfig(const UiConfig& config)
     }
 }
 
+void MainWindow::setPetLifecycleController(PetLifecycleController* controller)
+{
+    if (petLifecycleController_ == controller) return;
+    if (petLifecycleController_ != nullptr) {
+        disconnect(petLifecycleController_, nullptr, this, nullptr);
+    }
+    petLifecycleController_ = controller;
+    if (petLifecycleController_ == nullptr) return;
+    idleDescription_ = petLifecycleController_->currentIdleDescription();
+    levelProgress_->setProgress(petLifecycleController_->level(),
+                                petLifecycleController_->progressPercent());
+    connect(petLifecycleController_, &PetLifecycleController::startupGreetingRequested,
+            this, &MainWindow::showStartupGreeting);
+    connect(petLifecycleController_, &PetLifecycleController::idleDescriptionChanged,
+            this, [this](const QString& text) {
+                idleDescription_ = text;
+                refreshStateLabel();
+            });
+    connect(petLifecycleController_, &PetLifecycleController::progressChanged,
+            levelProgress_, &LevelProgressWidget::setProgress);
+    connect(petLifecycleController_, &PetLifecycleController::levelUp,
+            this, &MainWindow::showLevelUp);
+    refreshStateLabel();
+}
+
 void MainWindow::toggleScreenCapture(bool enabled)
 {
     AppError error;
@@ -415,6 +452,7 @@ void MainWindow::applyWindowScale()
     QFont petFont = petVisual_->font();
     petFont.setPointSizeF(25.0 * metrics.factor());
     petVisual_->setFont(petFont);
+    levelProgress_->setFixedSize(metrics.scaled(66), metrics.scaled(66));
 
     actionPanel_->setUiScalePercent(percent);
     inputPanel_->setUiScalePercent(percent);
@@ -552,7 +590,7 @@ void MainWindow::onReplyFinished(const QString& requestId, const QString& conten
     inputPanel_->setRetryEnabled(false);
     inputPanel_->focusInput();
     if (conversationController_ != nullptr) conversationController_->switchConversation(conversationId_);
-    if (screenshotRequest) screenObservation_->finishScheduledRequest();
+    if (screenshotRequest) screenObservation_->finishScheduledRequest(true);
     else screenObservation_->setBusy(false);
 }
 
@@ -570,7 +608,7 @@ void MainWindow::onRequestFailed(const QString& requestId, const ModelError& err
         attachments_->reposition();
     }
     if (conversationController_ != nullptr) conversationController_->switchConversation(conversationId_);
-    if (screenshotRequest) screenObservation_->finishScheduledRequest();
+    if (screenshotRequest) screenObservation_->finishScheduledRequest(false);
     else screenObservation_->setBusy(false);
 }
 
@@ -593,9 +631,11 @@ void MainWindow::onScreenCaptured(const CapturedImage& image)
     options.disableThinking = true;
     const QString requestId = chatController_->sendScreenshotMessage(
         conversationId_, QStringLiteral("请分析当前屏幕内容，并用自然、简洁的方式回应。"),
-        attachment, image.fingerprint, image.capturedAt, options);
+        attachment, image.fingerprint, image.capturedAt, options,
+        image.captureId, image.source, image.durationMs, image.appHint,
+        settingsController_ == nullptr ? QString{} : settingsController_->activeModel().model);
     if (requestId.isEmpty()) {
-        screenObservation_->finishScheduledRequest();
+        screenObservation_->finishScheduledRequest(false);
         return;
     }
     currentRequestId_ = requestId;
@@ -671,8 +711,36 @@ void MainWindow::showPetShell()
 
 void MainWindow::updatePetState(PetState state)
 {
-    switch (state) {
-    case PetState::Idle: stateLabel_->setText(QStringLiteral("空闲")); break;
+    petState_ = state;
+    refreshStateLabel();
+}
+
+void MainWindow::showStartupGreeting(const QString& text)
+{
+    if (text.trimmed().isEmpty()) return;
+    replyBubble_->beginReply();
+    replyBubble_->finishReply(text);
+    attachments_->reposition();
+}
+
+void MainWindow::showLevelUp(int level)
+{
+    Q_UNUSED(level);
+    showingLevelUp_ = true;
+    stateLabel_->setStyleSheet(QStringLiteral("color:#ff3b30;font-weight:700;"));
+    stateLabel_->setText(QStringLiteral("升级了！！！"));
+    levelUpTimer_->start(10 * 1000);
+}
+
+void MainWindow::refreshStateLabel()
+{
+    if (showingLevelUp_) return;
+    stateLabel_->setStyleSheet(QString{});
+    switch (petState_) {
+    case PetState::Idle:
+        stateLabel_->setText(idleDescription_.isEmpty()
+            ? QStringLiteral("摸鱼中~") : idleDescription_);
+        break;
     case PetState::Thinking: stateLabel_->setText(QStringLiteral("思考中…")); break;
     case PetState::Speaking: stateLabel_->setText(QStringLiteral("回复中…")); break;
     case PetState::Error: stateLabel_->setText(QStringLiteral("遇到问题")); break;

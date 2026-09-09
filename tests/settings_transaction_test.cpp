@@ -152,10 +152,15 @@ private slots:
         auto* relevantLimit = dialog.findChild<QSpinBox*>(QStringLiteral("settingsRelevantHistoryLimit"));
         auto* longTermLimit = dialog.findChild<QSpinBox*>(QStringLiteral("settingsLongTermMemoryLimit"));
         auto* contextLimit = dialog.findChild<QSpinBox*>(QStringLiteral("settingsContextTokenLimit"));
+        auto* summaryMessageLimit = dialog.findChild<QSpinBox*>(QStringLiteral("settingsSummaryMessageThreshold"));
+        auto* summaryTokenLimit = dialog.findChild<QSpinBox*>(QStringLiteral("settingsSummaryTokenThreshold"));
         QVERIFY(relevantLimit != nullptr && longTermLimit != nullptr && contextLimit != nullptr);
+        QVERIFY(summaryMessageLimit != nullptr && summaryTokenLimit != nullptr);
         QCOMPARE(relevantLimit->maximum(), MemoryLimits::MaximumRetrievedItems);
         QCOMPARE(longTermLimit->maximum(), MemoryLimits::MaximumRetrievedItems);
         QCOMPARE(contextLimit->maximum(), MemoryLimits::MaximumContextTokens);
+        QCOMPARE(summaryMessageLimit->maximum(), MemoryLimits::MaximumSummaryMessages);
+        QCOMPARE(summaryTokenLimit->maximum(), MemoryLimits::MaximumSummaryTokens);
         QCOMPARE(profileList->currentData().toString(), QStringLiteral("settings-test"));
         QCOMPARE(profileList->currentText(), QStringLiteral("Mock 已应用"));
         const QString hiddenPersonaName = chat.personaConfig().name;

@@ -177,7 +177,7 @@ private slots:
         QString errorMessage;
         QVERIFY2(database.open(databasePath, &errorMessage), qPrintable(errorMessage));
         QVERIFY(database.isOpen());
-        QCOMPARE(database.schemaVersion(), 4);
+        QCOMPARE(database.schemaVersion(), 5);
     }
 
     void databaseMigratesVersionThreeMemorySourcesToObservationForeignKey()
@@ -225,7 +225,7 @@ private slots:
         Database database;
         QString error;
         QVERIFY2(database.open(path, &error), qPrintable(error));
-        QCOMPARE(database.schemaVersion(), 4);
+        QCOMPARE(database.schemaVersion(), 5);
         QSqlQuery memory(database.connection());
         QVERIFY(memory.exec(QStringLiteral(
             "SELECT content,source_event_id FROM memories ORDER BY id LIMIT 1")));

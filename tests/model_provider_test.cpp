@@ -1,5 +1,9 @@
 #include <QtTest/QtTest>
 #include <QHostAddress>
+#include <QBuffer>
+#include <QImage>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSignalSpy>
 #include <QSslSocket>
 #include <QTcpServer>
@@ -447,6 +451,101 @@ private slots:
         QCOMPARE(result.error.code, ModelErrorCode::InvalidResponse);
         QCOMPARE(connectionCount, 1);
         QCOMPARE(provider.lastAttemptCount(), 1);
+    }
+
+    void oversizedVisionRequestIsRejectedBeforeNetwork()
+    {
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost));
+        int connectionCount = 0;
+        connect(&server, &QTcpServer::newConnection, this, [&]() { ++connectionCount; });
+
+        HttpClient httpClient;
+        ProviderConfig config;
+        config.baseUrl = QStringLiteral("http://127.0.0.1:%1").arg(server.serverPort());
+        config.model = QStringLiteral("vision-model");
+        config.apiKey = QStringLiteral("test-key");
+        OpenAICompatibleProvider provider(config, &httpClient);
+        QSignalSpy finishSpy(&provider, &ChatProvider::chatFinished);
+        MessageImage image;
+        // 无法解码的附件不能二次压缩，Base64 后会超过 8 MiB 硬上限。
+        image.data = QByteArray(OpenAICompatibleProvider::MaximumRequestBodyBytes, 'x');
+        image.mimeType = QStringLiteral("image/jpeg");
+        ChatOptions options;
+        options.requestKind = ChatRequestKind::Screenshot;
+        provider.startChat({Message::createWithImage(
+                               MessageRole::User, QStringLiteral("screen"), image)}, options);
+        QVERIFY(finishSpy.wait(3000));
+        const ChatResult result = resultFromSpy(finishSpy);
+        QVERIFY(!result.succeeded);
+        QCOMPARE(result.error.code, ModelErrorCode::InvalidRequest);
+        QVERIFY(result.error.message.contains(QStringLiteral("8 MiB")));
+        QCOMPARE(connectionCount, 0);
+        QCOMPARE(provider.lastAttemptCount(), 0);
+    }
+
+    void oversizedVisionImageIsRecompressedBeforeSending()
+    {
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost));
+        QByteArray received;
+        connect(&server, &QTcpServer::newConnection, this, [&]() {
+            QTcpSocket* socket = server.nextPendingConnection();
+            connect(socket, &QTcpSocket::readyRead, socket, [&, socket, responded = false]() mutable {
+                if (responded) return;
+                received += socket->readAll();
+                const int headerEnd = received.indexOf("\r\n\r\n");
+                if (headerEnd < 0) return;
+                qint64 contentLength = -1;
+                const QList<QByteArray> lines = received.left(headerEnd).split('\n');
+                for (QByteArray line : lines) {
+                    line = line.trimmed();
+                    if (line.toLower().startsWith("content-length:")) {
+                        contentLength = line.mid(line.indexOf(':') + 1).trimmed().toLongLong();
+                    }
+                }
+                if (contentLength < 0 || received.size() < headerEnd + 4 + contentLength) return;
+                responded = true;
+                const QByteArray responseBody = QByteArrayLiteral(
+                    "{\"choices\":[{\"message\":{\"content\":\"compressed\"}}]}");
+                socket->write(QByteArrayLiteral(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ")
+                    + QByteArray::number(responseBody.size())
+                    + QByteArrayLiteral("\r\nConnection: close\r\n\r\n") + responseBody);
+                socket->flush();
+            });
+        });
+
+        QImage source(2048, 2048, QImage::Format_RGB32);
+        source.fill(QColor(40, 120, 200));
+        MessageImage image;
+        QBuffer imageBuffer(&image.data);
+        QVERIFY(imageBuffer.open(QIODevice::WriteOnly));
+        QVERIFY(source.save(&imageBuffer, "BMP"));
+        QVERIFY(image.data.size() > OpenAICompatibleProvider::MaximumRequestBodyBytes);
+        image.mimeType = QStringLiteral("image/bmp");
+        image.size = source.size();
+
+        HttpClient httpClient;
+        ProviderConfig config;
+        config.baseUrl = QStringLiteral("http://127.0.0.1:%1").arg(server.serverPort());
+        config.model = QStringLiteral("vision-model");
+        config.apiKey = QStringLiteral("test-key");
+        OpenAICompatibleProvider provider(config, &httpClient);
+        QSignalSpy finishSpy(&provider, &ChatProvider::chatFinished);
+        ChatOptions options;
+        options.requestKind = ChatRequestKind::Screenshot;
+        provider.startChat({Message::createWithImage(
+                               MessageRole::User, QStringLiteral("screen"), image)}, options);
+        QVERIFY(finishSpy.wait(5000));
+        QVERIFY(resultFromSpy(finishSpy).succeeded);
+        const int headerEnd = received.indexOf("\r\n\r\n");
+        QVERIFY(headerEnd > 0);
+        const QByteArray body = received.mid(headerEnd + 4);
+        QVERIFY(body.size() <= OpenAICompatibleProvider::MaximumRequestBodyBytes);
+        const QJsonDocument document = QJsonDocument::fromJson(body);
+        QVERIFY(document.isObject());
+        QVERIFY(body.contains("data:image/jpeg;base64,"));
     }
 
     void deepSeekProviderUsesDefaults()

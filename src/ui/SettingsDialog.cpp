@@ -1,4 +1,5 @@
 #include "ui/SettingsDialog.h"
+#include "ui/MemoryManagementDialog.h"
 #include "ui/CaptureUiController.h"
 #include "ui/UiScaleMetrics.h"
 
@@ -152,15 +153,29 @@ SettingsDialog::SettingsDialog(SettingsController* controller, QWidget* parent,
     longTermLimit_ = spin(memoryBox, MemoryLimits::MinimumRetrievedItems,
                           MemoryLimits::MaximumRetrievedItems);
     contextTokens_ = spin(memoryBox, MemoryLimits::MinimumContextTokens,
-                          MemoryLimits::MaximumContextTokens);
+                           MemoryLimits::MaximumContextTokens);
+    summaryMessageThreshold_ = spin(memoryBox, MemoryLimits::MinimumSummaryMessages,
+                                    MemoryLimits::MaximumSummaryMessages);
+    summaryTokenThreshold_ = spin(memoryBox, MemoryLimits::MinimumSummaryTokens,
+                                  MemoryLimits::MaximumSummaryTokens);
     recentLimit_->setObjectName(QStringLiteral("settingsRecentMessageLimit"));
     relevantLimit_->setObjectName(QStringLiteral("settingsRelevantHistoryLimit"));
     longTermLimit_->setObjectName(QStringLiteral("settingsLongTermMemoryLimit"));
     contextTokens_->setObjectName(QStringLiteral("settingsContextTokenLimit"));
+    summaryMessageThreshold_->setObjectName(QStringLiteral("settingsSummaryMessageThreshold"));
+    summaryTokenThreshold_->setObjectName(QStringLiteral("settingsSummaryTokenThreshold"));
     memoryForm->addRow(QStringLiteral("最近消息条数"), recentLimit_);
     memoryForm->addRow(QStringLiteral("相关历史条数"), relevantLimit_);
     memoryForm->addRow(QStringLiteral("长期记忆条数"), longTermLimit_);
     memoryForm->addRow(QStringLiteral("总上下文 Token"), contextTokens_);
+    memoryForm->addRow(QStringLiteral("自动摘要消息阈值"), summaryMessageThreshold_);
+    memoryForm->addRow(QStringLiteral("自动摘要 Token 阈值"), summaryTokenThreshold_);
+    auto* manageMemories = new QPushButton(QStringLiteral("查看和管理具体记忆"), memoryBox);
+    manageMemories->setObjectName(QStringLiteral("settingsManageMemoriesButton"));
+    memoryForm->addRow(manageMemories);
+    connect(manageMemories, &QPushButton::clicked, this, [this]() {
+        MemoryManagementDialog dialog(controller_, this); dialog.exec();
+    });
 
     auto* uiBox = new QGroupBox(QStringLiteral("界面"), content);
     auto* uiForm = new QFormLayout(uiBox);
@@ -358,6 +373,8 @@ void SettingsDialog::populate()
     relevantLimit_->setValue(limits.relevantHistoryLimit);
     longTermLimit_->setValue(limits.longTermMemoryLimit);
     contextTokens_->setValue(limits.maxContextTokens);
+    summaryMessageThreshold_->setValue(limits.summaryMessageThreshold);
+    summaryTokenThreshold_->setValue(limits.summaryTokenThreshold);
     bubbleDurationSeconds_->setValue(controller_->uiConfig().replyBubbleDurationMs / 1000);
     const UiConfig ui = controller_->uiConfig();
     windowScalePercent_->setValue(ui.windowScalePercent);
@@ -430,6 +447,8 @@ void SettingsDialog::applySettings()
     MemoryLimits limits;
     limits.recentMessageLimit = recentLimit_->value(); limits.relevantHistoryLimit = relevantLimit_->value();
     limits.longTermMemoryLimit = longTermLimit_->value(); limits.maxContextTokens = contextTokens_->value();
+    limits.summaryMessageThreshold = summaryMessageThreshold_->value();
+    limits.summaryTokenThreshold = summaryTokenThreshold_->value();
     UiConfig ui = controller_->uiConfig();
     ui.replyBubbleDurationMs = bubbleDurationSeconds_->value() * 1000;
     ui.windowScalePercent = windowScalePercent_->value();

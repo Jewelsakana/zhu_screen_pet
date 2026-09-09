@@ -26,9 +26,14 @@ QString ChatController::sendMessage(const QString& conversationId, const QString
 
 QString ChatController::sendScreenshotMessage(const QString& conversationId, const QString& text,
                                               const MessageImage& image,
-                                              const QByteArray& fingerprint,
-                                              const QDateTime& capturedAt,
-                                              const ChatOptions& options)
+                                               const QByteArray& fingerprint,
+                                               const QDateTime& capturedAt,
+                                               const ChatOptions& options,
+                                               const QString& captureId,
+                                               const QString& source,
+                                               int captureDurationMs,
+                                               const QString& appHint,
+                                               const QString& modelProvider)
 {
     if (!image.isValid() || fingerprint.isEmpty() || !capturedAt.isValid()) {
         fail({AppErrorCode::InvalidArgument, QStringLiteral("截图内容不能为空"), 0,
@@ -38,7 +43,8 @@ QString ChatController::sendScreenshotMessage(const QString& conversationId, con
         return {};
     }
     return sendMessageInternal(conversationId, text, &image, fingerprint, capturedAt,
-                               ChatRequestKind::Screenshot, options);
+                               ChatRequestKind::Screenshot, options, captureId, source,
+                               captureDurationMs, appHint, modelProvider);
 }
 
 QString ChatController::sendUserMessageWithScreenshot(
@@ -59,8 +65,11 @@ QString ChatController::sendUserMessageWithScreenshot(
 
 QString ChatController::sendMessageInternal(const QString& conversationId, const QString& text,
                                             const MessageImage* image, const QByteArray& fingerprint,
-                                            const QDateTime& capturedAt,
-                                            ChatRequestKind requestKind, ChatOptions options)
+                                             const QDateTime& capturedAt,
+                                             ChatRequestKind requestKind, ChatOptions options,
+                                             const QString& captureId, const QString& source,
+                                             int captureDurationMs, const QString& appHint,
+                                             const QString& modelProvider)
 {
     lastError_ = AppError{};
     if (provider_ == nullptr || memory_ == nullptr) {
@@ -138,6 +147,13 @@ QString ChatController::sendMessageInternal(const QString& conversationId, const
     pending.options = options;
     pending.observationFingerprint = fingerprint;
     pending.observationCapturedAt = capturedAt;
+    pending.observationCaptureId = captureId;
+    pending.observationSource = source;
+    pending.observationImageFormat = image == nullptr ? QString{} : image->mimeType;
+    pending.observationImageSize = image == nullptr ? QSize{} : image->size;
+    pending.observationDurationMs = captureDurationMs;
+    pending.observationAppHint = appHint;
+    pending.observationModelProvider = modelProvider;
     // Persona 的回复长度是应用级策略，统一覆盖调用方的临时 maxTokens。
     pending.options.maxTokens = persona_.maxReplyTokens;
     return startPending(std::move(pending));
@@ -245,11 +261,19 @@ void ChatController::onChatFinished(const QString& requestId, const ChatResult& 
     if (persisted && pending.kind == ChatRequestKind::Screenshot) {
         ObservationEvent observation;
         observation.conversationId = pending.conversationId;
+        observation.captureId = pending.observationCaptureId;
         observation.summary = content;
         observation.fingerprint = pending.observationFingerprint;
         observation.capturedAt = pending.observationCapturedAt;
         observation.expiresAt = pending.observationCapturedAt.addSecs(
             ObservationEvent::DefaultTtlSeconds);
+        observation.source = pending.observationSource;
+        observation.appHint = pending.observationAppHint;
+        observation.modelRequestId = requestId;
+        observation.modelProvider = pending.observationModelProvider;
+        observation.imageFormat = pending.observationImageFormat;
+        observation.imageSize = pending.observationImageSize;
+        observation.durationMs = pending.observationDurationMs;
         persisted = memory_->appendObservation(observation, &errorMessage);
     } else if (persisted) {
         persisted = memory_->appendMessage(
@@ -273,6 +297,7 @@ void ChatController::onChatFinished(const QString& requestId, const ChatResult& 
         return;
     }
     if (pending.kind == ChatRequestKind::Normal) hasLastFailed_ = false;
+    if (pending.kind == ChatRequestKind::Normal) emit conversationTurnCompleted(pending.conversationId);
     setState(PetState::Idle);
     emit replyFinished(requestId, content);
 }

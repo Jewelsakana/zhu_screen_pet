@@ -21,6 +21,7 @@ class QMouseEvent;
 class QResizeEvent;
 class QShowEvent;
 class QHideEvent;
+class QTimer;
 class QWidget;
 
 namespace zhu_screen_pet {
@@ -35,6 +36,8 @@ class ErrorBannerWindow;
 class ErrorCenter;
 class HoverRevealController;
 class PetWindowResizeController;
+class PetLifecycleController;
+class LevelProgressWidget;
 class ReplyBubbleWindow;
 class SettingsController;
 class ScreenCapture;
@@ -55,6 +58,7 @@ public:
     void setErrorCenter(ErrorCenter* errorCenter);
     void setConversationController(ConversationController* controller);
     void setSettingsController(SettingsController* controller);
+    void setPetLifecycleController(PetLifecycleController* controller);
     void setCaptureDirectory(const QString& directory);
     void setModelErrorMessages(const QHash<QString, QString>& messages);
     void setConversation(const QString& conversationId,
@@ -107,6 +111,9 @@ private:
                                       const QVector<ConversationMessage>& messages);
     void hidePetShell();
     void updatePetState(PetState state);
+    void showStartupGreeting(const QString& text);
+    void showLevelUp(int level);
+    void refreshStateLabel();
     bool isCurrentRequest(const QString& requestId) const;
 
     ChatController* chatController_ = nullptr;
@@ -137,6 +144,12 @@ private:
     ScreenObservationCoordinator* screenObservation_ = nullptr;
     CaptureUiController* captureUiController_ = nullptr;
     PetWindowResizeController* resizeController_ = nullptr;
+    PetLifecycleController* petLifecycleController_ = nullptr;
+    LevelProgressWidget* levelProgress_ = nullptr;
+    QTimer* levelUpTimer_ = nullptr;
+    PetState petState_ = PetState::Idle;
+    QString idleDescription_ = QStringLiteral("摸鱼中~");
+    bool showingLevelUp_ = false;
     bool captureCorrectionPending_ = false;
 };
 

@@ -11,6 +11,7 @@ class QPushButton;
 class QTextBrowser;
 class QTimer;
 class QEnterEvent;
+class QResizeEvent;
 
 namespace zhu_screen_pet {
 
@@ -36,9 +37,12 @@ public:
 protected:
     void enterEvent(QEnterEvent* event) override;
     void leaveEvent(QEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
 private:
     void restartDismissalTimer();
+    void updateContentHeight();
+    void positionCloseButton();
 
     QTextBrowser* content_ = nullptr;
     QPushButton* close_ = nullptr;
@@ -48,6 +52,8 @@ private:
     QTimer* dismissalTimer_ = nullptr;
     int displayDurationMs_ = 15000;
     int remainingMs_ = 15000;
+    int minimumContentHeight_ = 48;
+    int maximumContentHeight_ = 220;
     bool finished_ = false;
 };
 

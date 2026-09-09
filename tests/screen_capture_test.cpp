@@ -156,6 +156,52 @@ private slots:
         QCOMPARE(ScreenFingerprint::differenceRatio(
                      first, ScreenFingerprint::create(descending)), 1.0);
     }
+
+    void automaticVisionQueueIsBoundedAndFailuresOpenCircuit()
+    {
+        ScreenObservationCoordinator coordinator;
+        coordinator.setObservationReady(true);
+        UiConfig config;
+        config.screenCaptureEnabled = true;
+        config.automaticScreenAnalysisEnabled = true;
+        coordinator.applyConfiguration(config);
+        QSignalSpy readySpy(&coordinator,
+                            &ScreenObservationCoordinator::scheduledImageReady);
+
+        CapturedImage image;
+        image.data = QByteArrayLiteral("image");
+        image.trigger = CaptureTrigger::Scheduled;
+        image.fingerprint = QByteArray(
+            (ScreenFingerprint::Width * ScreenFingerprint::Height + 7) / 8, '\0');
+        for (int failure = 0;
+             failure < ScreenCapturePolicy::AutomaticFailureCircuitThreshold;
+             ++failure) {
+            image.fingerprint.fill(failure == 0 ? '\0'
+                                   : failure == 1 ? static_cast<char>(0xff)
+                                                  : static_cast<char>(0xaa));
+            emit coordinator.screenCapture()->captured(image);
+            QCOMPARE(coordinator.scheduledQueueDepth(), 1);
+            // 在途请求未完成时，新截图不会进入队列。
+            emit coordinator.screenCapture()->captured(image);
+            QCOMPARE(coordinator.scheduledQueueDepth(), 1);
+            coordinator.finishScheduledRequest(false);
+        }
+        QCOMPARE(readySpy.count(),
+                 ScreenCapturePolicy::AutomaticFailureCircuitThreshold);
+        QVERIFY(coordinator.automaticCircuitOpen());
+        QCOMPARE(coordinator.scheduledQueueDepth(), 0);
+        image.fingerprint[0] = static_cast<char>(99);
+        emit coordinator.screenCapture()->captured(image);
+        QCOMPARE(readySpy.count(),
+                 ScreenCapturePolicy::AutomaticFailureCircuitThreshold);
+
+        // 用户重新开启自动分析时显式复位熔断状态。
+        config.automaticScreenAnalysisEnabled = false;
+        coordinator.applyConfiguration(config);
+        config.automaticScreenAnalysisEnabled = true;
+        coordinator.applyConfiguration(config);
+        QVERIFY(!coordinator.automaticCircuitOpen());
+    }
 };
 
 } // namespace zhu_screen_pet

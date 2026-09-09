@@ -26,8 +26,26 @@ public:
                            QString* errorMessage = nullptr);
     QVector<MemoryItem> retrieveRelevant(const QString& query, int limit,
                                          QString* errorMessage = nullptr) const;
-    /** 未完成功能：长期记忆自动提取与会话摘要扩展点；当前版本不修改任何数据。 */
+    /** 判断指定会话是否达到后台摘要阈值；实际模型任务由 MemoryMaintenanceService 执行。 */
     bool summarizeIfNeeded(const QString& conversationId, QString* errorMessage = nullptr);
+    QVector<ConversationMessage> unsummarizedMessages(const QString& conversationId, int limit,
+                                                      QString* errorMessage = nullptr) const;
+    bool markMessagesSummarized(const QVector<qint64>& messageIds,
+                                const QDateTime& summarizedAt = {},
+                                QString* errorMessage = nullptr);
+    bool saveExtractedFact(const QString& content, const QString& category,
+                           double confidence, double importance,
+                           const QString& sourceReference, QString* errorMessage = nullptr);
+    bool clearMemoryKind(const QString& kind, QString* errorMessage = nullptr);
+    /** 清理过期短期记忆并限制总条数；返回删除数量，失败返回 -1。 */
+    int cleanupShortTermMemories(QString* errorMessage = nullptr);
+    QVector<MemoryItem> listMemories(const QString& kind, const QString& query,
+                                     int limit, QString* errorMessage = nullptr) const;
+    MemoryItem getMemory(qint64 id, QString* errorMessage = nullptr) const;
+    bool updateMemory(const MemoryItem& item, QString* errorMessage = nullptr);
+    bool removeMemory(qint64 id, QString* errorMessage = nullptr);
+    std::optional<MemoryItem> conversationSummary(const QString& conversationId,
+                                                  QString* errorMessage = nullptr) const;
 
     static int estimateTokens(const QString& text);
     /** 按常见 OpenAI 兼容视觉输入的 512px 分块规则估算图片 token。 */

@@ -3,6 +3,7 @@
 #include <QByteArray>
 #include <QDateTime>
 #include <QString>
+#include <QSize>
 
 namespace zhu_screen_pet {
 
@@ -12,9 +13,17 @@ struct ObservationEvent
     static constexpr int DefaultTtlSeconds = 600;
 
     QString id;
+    QString captureId;
     QString conversationId;
     QString summary;
     QByteArray fingerprint;
+    QString source;
+    QString appHint;
+    QString modelRequestId;
+    QString modelProvider;
+    QString imageFormat;
+    QSize imageSize;
+    int durationMs = 0;
     QDateTime capturedAt;
     QDateTime expiresAt;
 };

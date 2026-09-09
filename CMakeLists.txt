@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.22)
 
 project(zhu_screen_pet VERSION 0.1.0 LANGUAGES CXX)
 
+if (WIN32)
+    enable_language(RC)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -152,6 +156,10 @@ add_executable(zhu_screen_pet WIN32
     "${CMAKE_CURRENT_SOURCE_DIR}/src/app/ApplicationBootstrapper.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/app/ApplicationBootstrapper.h"
     ${ZHU_SCREEN_PET_RESOURCE_FILES})
+if (WIN32)
+    target_sources(zhu_screen_pet PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/app.rc")
+endif()
 zhu_screen_pet_configure_target(zhu_screen_pet)
 zhu_screen_pet_deploy_openssl(zhu_screen_pet)
 if (ZHU_SCREEN_PET_RUNTIME_IMAGE_FILES)
@@ -182,6 +190,7 @@ if (WIN32)
             COMMAND "${ZHU_SCREEN_PET_WINDEPLOYQT_EXECUTABLE}"
                 "$<IF:$<CONFIG:Debug>,--debug,--release>"
                 --no-compiler-runtime
+                --no-system-dxc-compiler
                 --no-translations
                 --force
                 --dir "$<TARGET_FILE_DIR:zhu_screen_pet>"
@@ -212,6 +221,7 @@ if (WIN32)
             COMMAND "${ZHU_SCREEN_PET_WINDEPLOYQT_EXECUTABLE}"
                 "$<IF:$<CONFIG:Debug>,--debug,--release>"
                 --no-compiler-runtime
+                --no-system-dxc-compiler
                 --no-translations
                 --force
                 --dir "${ZHU_SCREEN_PET_PORTABLE_DIR}"
@@ -268,6 +278,8 @@ if (ZHU_SCREEN_PET_BUILD_TESTS)
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/config_repository_test.cpp")
     zhu_screen_pet_add_test(zhu_screen_pet_window_behavior_test
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/window_behavior_test.cpp")
+    zhu_screen_pet_add_test(zhu_screen_pet_pet_lifecycle_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/pet_lifecycle_test.cpp")
     zhu_screen_pet_add_test(zhu_screen_pet_model_provider_test
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/model_provider_test.cpp")
     zhu_screen_pet_add_test(zhu_screen_pet_memory_chat_test

@@ -38,9 +38,14 @@ struct MemoryItem
     QString kind;
     QString content;
     QString sourceEventId;
+    QString sourceKind;
+    QString sourceReference;
     QDateTime createdAt;
     QDateTime expiresAt;
+    QDateTime updatedAt;
+    QString category;
+    double confidence = 0.0;
+    double importance = 0.0;
 };
 
 } // namespace zhu_screen_pet
-

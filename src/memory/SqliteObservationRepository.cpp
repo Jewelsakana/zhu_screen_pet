@@ -31,10 +31,12 @@ ObservationEvent readObservation(const QSqlQuery& query)
     ObservationEvent observation;
     observation.id = query.value(0).toString();
     observation.conversationId = query.value(1).toString();
-    observation.summary = query.value(2).toString();
-    observation.fingerprint = query.value(3).toByteArray();
-    observation.capturedAt = parseTime(query.value(4));
-    observation.expiresAt = parseTime(query.value(5));
+    observation.summary = query.value(2).toString(); observation.fingerprint = query.value(3).toByteArray();
+    observation.capturedAt = parseTime(query.value(4)); observation.expiresAt = parseTime(query.value(5));
+    observation.captureId = query.value(6).toString(); observation.source = query.value(7).toString();
+    observation.appHint = query.value(8).toString(); observation.modelRequestId = query.value(9).toString();
+    observation.modelProvider = query.value(10).toString(); observation.imageFormat = query.value(11).toString();
+    observation.imageSize = QSize(query.value(12).toInt(), query.value(13).toInt()); observation.durationMs = query.value(14).toInt();
     return observation;
 }
 
@@ -69,14 +71,22 @@ Result<QString> SqliteObservationRepository::saveResult(const ObservationEvent& 
         ? QUuid::createUuid().toString(QUuid::Id128) : observation.id.trimmed();
     QSqlQuery query(database_->connection());
     query.prepare(QStringLiteral(
-        "INSERT INTO observation_events(id,conversation_id,summary,fingerprint,captured_at,expires_at) "
-        "VALUES(?,?,?,?,?,?)"));
+        "INSERT INTO observation_events(id,conversation_id,summary,fingerprint,captured_at,expires_at,capture_id,source,app_hint,model_request_id,model_provider,image_format,image_width,image_height,duration_ms) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"));
     query.addBindValue(id);
     query.addBindValue(observation.conversationId);
     query.addBindValue(observation.summary.trimmed());
     query.addBindValue(observation.fingerprint);
     query.addBindValue(serializeTime(capturedAt));
     query.addBindValue(serializeTime(expiresAt));
+    query.addBindValue(observation.captureId.trimmed().isEmpty() ? id : observation.captureId.trimmed());
+    query.addBindValue(observation.source.trimmed().isEmpty() ? QStringLiteral("primary_screen") : observation.source.trimmed());
+    query.addBindValue(observation.appHint.isNull() ? QStringLiteral("") : observation.appHint);
+    query.addBindValue(observation.modelRequestId.isNull() ? QStringLiteral("") : observation.modelRequestId);
+    query.addBindValue(observation.modelProvider.isNull() ? QStringLiteral("") : observation.modelProvider);
+    query.addBindValue(observation.imageFormat.isNull() ? QStringLiteral("") : observation.imageFormat);
+    query.addBindValue(observation.imageSize.width()); query.addBindValue(observation.imageSize.height());
+    query.addBindValue(qMax(0, observation.durationMs));
     if (!query.exec()) {
         return Result<QString>::failure(observationError(
             AppErrorCode::DatabaseQuery, QStringLiteral("无法保存屏幕观察"),
@@ -101,7 +111,7 @@ Result<std::optional<ObservationEvent>> SqliteObservationRepository::latestValid
     }
     QSqlQuery query(database_->connection());
     query.prepare(QStringLiteral(
-        "SELECT id,conversation_id,summary,fingerprint,captured_at,expires_at "
+        "SELECT id,conversation_id,summary,fingerprint,captured_at,expires_at,capture_id,source,app_hint,model_request_id,model_provider,image_format,image_width,image_height,duration_ms "
         "FROM observation_events WHERE conversation_id=? AND expires_at>? "
         "ORDER BY captured_at DESC,id DESC LIMIT 1"));
     query.addBindValue(conversationId);

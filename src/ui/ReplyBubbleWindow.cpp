@@ -5,7 +5,9 @@
 #include <QHBoxLayout>
 #include <QPainter>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QTextBrowser>
+#include <QTextDocument>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QtMath>
@@ -59,6 +61,34 @@ private:
     bool pointsRight_ = true;
 };
 
+/** 自行绘制卡片圆角，避免首次显示时依赖平台对 QSS 背景的裁剪时序。 */
+class BubbleCard final : public QFrame
+{
+public:
+    explicit BubbleCard(QWidget* parent = nullptr) : QFrame(parent) {}
+
+    void setCornerRadius(qreal radius)
+    {
+        cornerRadius_ = qMax<qreal>(1.0, radius);
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        const QRectF cardRect = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        const qreal radius = qMin(cornerRadius_, cardRect.height() / 2.0);
+        painter.setPen(QPen(QColor(QStringLiteral("#ddcfb7")), 1.0));
+        painter.setBrush(QColor(QStringLiteral("#fffaf0")));
+        painter.drawRoundedRect(cardRect, radius, radius);
+    }
+
+private:
+    qreal cornerRadius_ = 24.0;
+};
+
 } // namespace
 
 ReplyBubbleWindow::ReplyBubbleWindow(QWidget* parent)
@@ -69,35 +99,36 @@ ReplyBubbleWindow::ReplyBubbleWindow(QWidget* parent)
     DesktopWindowPolicy::apply(this, {true, true, true, false, false, false});
     setStyleSheet(QStringLiteral(
         "QWidget#replyBubble{background:transparent;border:none;}"
-        "QFrame#replyBubbleCard{background:#fffaf0;border:1px solid #ddcfb7;border-radius:24px;}"
+        "QFrame#replyBubbleCard{background:transparent;border:none;}"
         "QTextBrowser{background:transparent;border:none;color:#263047;padding:7px;}"
         "QPushButton{border:none;background:#e7f0ff;color:#36558f;border-radius:9px;padding:4px 8px;}"
         "QPushButton:hover{background:#cfe0ff;color:#253c80;}"));
     rootLayout_ = new QHBoxLayout(this);
     rootLayout_->setContentsMargins(1, 1, 1, 1);
     rootLayout_->setSpacing(-1);
-    card_ = new QFrame(this);
+    card_ = new BubbleCard(this);
     card_->setObjectName(QStringLiteral("replyBubbleCard"));
     card_->setAttribute(Qt::WA_StyledBackground, true);
     auto* cardLayout = new QVBoxLayout(card_);
-    cardLayout->setContentsMargins(15, 10, 11, 13);
-    auto* actions = new QHBoxLayout();
-    actions->addStretch();
+    // 关闭按钮悬浮于右上角，避免独占一整行而把正文推到气泡中部。
+    cardLayout->setContentsMargins(15, 10, 50, 13);
     close_ = new QPushButton(QStringLiteral("✕"), card_);
     close_->setObjectName(QStringLiteral("replyBubbleClose"));
-    actions->addWidget(close_);
+    close_->setFixedSize(40, 36);
     content_ = new QTextBrowser(card_);
     content_->setObjectName(QStringLiteral("replyBubbleContent"));
     content_->setOpenLinks(false);
-    content_->setMaximumHeight(220);
-    content_->setMinimumHeight(60);
+    content_->document()->setDocumentMargin(2.0);
+    content_->setAlignment(Qt::AlignLeft);
+    content_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    content_->setFixedHeight(minimumContentHeight_);
     content_->setCursor(Qt::IBeamCursor);
-    cardLayout->addLayout(actions);
-    cardLayout->addWidget(content_);
+    cardLayout->addWidget(content_, 0, Qt::AlignTop);
+    close_->raise();
     tail_ = new BubbleTail(this);
     rootLayout_->addWidget(card_, 1);
     rootLayout_->addWidget(tail_, 0, Qt::AlignVCenter);
-    setFixedWidth(352);
+    setFixedWidth(380);
     dismissalTimer_->setSingleShot(true);
     connect(dismissalTimer_, &QTimer::timeout, this, &QWidget::hide);
     connect(close_, &QPushButton::clicked, this, &QWidget::hide);
@@ -118,13 +149,16 @@ void ReplyBubbleWindow::setUiScalePercent(int percent)
                                     metrics.scaled(1), metrics.scaled(1));
     if (auto* cardLayout = qobject_cast<QVBoxLayout*>(card_->layout())) {
         cardLayout->setContentsMargins(metrics.scaled(15), metrics.scaled(10),
-                                       metrics.scaled(11), metrics.scaled(13));
+                                       metrics.scaled(50), metrics.scaled(13));
     }
+    static_cast<BubbleCard*>(card_)->setCornerRadius(metrics.scaled(24));
+    close_->setFixedSize(metrics.scaled(40), metrics.scaled(36));
     tail_->setFixedSize(metrics.scaled(22), metrics.scaled(38));
-    content_->setMinimumHeight(metrics.scaled(60));
-    content_->setMaximumHeight(metrics.scaled(220));
-    setFixedWidth(metrics.scaled(352));
-    adjustSize();
+    minimumContentHeight_ = metrics.scaled(48);
+    maximumContentHeight_ = metrics.scaled(220);
+    setFixedWidth(metrics.scaled(380));
+    updateContentHeight();
+    positionCloseButton();
 }
 
 void ReplyBubbleWindow::beginReply()
@@ -135,6 +169,7 @@ void ReplyBubbleWindow::beginReply()
     remainingMs_ = displayDurationMs_;
     show();
     raise();
+    updateContentHeight();
 }
 
 void ReplyBubbleWindow::appendDelta(const QString& delta)
@@ -145,11 +180,13 @@ void ReplyBubbleWindow::appendDelta(const QString& delta)
     cursor.insertText(delta);
     content_->setTextCursor(cursor);
     content_->ensureCursorVisible();
+    updateContentHeight();
 }
 
 void ReplyBubbleWindow::finishReply(const QString& completeContent)
 {
     if (!completeContent.isEmpty()) content_->setPlainText(completeContent);
+    updateContentHeight();
     if (!isVisible()) show();
     finished_ = true;
     remainingMs_ = displayDurationMs_;
@@ -197,6 +234,60 @@ void ReplyBubbleWindow::leaveEvent(QEvent* event)
 void ReplyBubbleWindow::restartDismissalTimer()
 {
     if (finished_ && !underMouse()) dismissalTimer_->start(qMax(1, remainingMs_));
+}
+
+void ReplyBubbleWindow::resizeEvent(QResizeEvent* event)
+{
+    QWidget::resizeEvent(event);
+    positionCloseButton();
+}
+
+void ReplyBubbleWindow::updateContentHeight()
+{
+    if (content_ == nullptr || card_ == nullptr) return;
+    const auto resizeToCurrentContent = [this]() {
+        if (card_->layout() != nullptr) {
+            card_->layout()->invalidate();
+            card_->layout()->activate();
+        }
+        rootLayout_->invalidate();
+        rootLayout_->activate();
+        // 顶层窗口曾显示过长内容后，普通 resize() 可能受旧布局缓存影响而拒绝缩小。
+        // 动态固定高度可同时覆盖增长和缩短，宽度仍由既有固定宽度控制。
+        setFixedHeight(qMax(1, rootLayout_->sizeHint().height()));
+    };
+    const int textWidth = qMax(80, content_->viewport()->width());
+    content_->document()->setTextWidth(textWidth);
+    const int documentHeight = qCeil(content_->document()->size().height());
+    const int targetHeight = qBound(minimumContentHeight_, documentHeight + 12,
+                                    maximumContentHeight_);
+    content_->setFixedHeight(targetHeight);
+    card_->updateGeometry();
+    resizeToCurrentContent();
+    QTimer::singleShot(0, this, [this, resizeToCurrentContent]() {
+        if (content_ == nullptr) return;
+        const int width = qMax(80, content_->viewport()->width());
+        if (!qFuzzyCompare(content_->document()->textWidth(), qreal(width))) {
+            content_->document()->setTextWidth(width);
+            const int height = qBound(minimumContentHeight_,
+                qCeil(content_->document()->size().height()) + 12,
+                maximumContentHeight_);
+            content_->setFixedHeight(height);
+            card_->updateGeometry();
+            resizeToCurrentContent();
+        }
+    });
+}
+
+void ReplyBubbleWindow::positionCloseButton()
+{
+    if (card_ == nullptr || close_ == nullptr) return;
+    const int rightMargin = qMax(8, (card_->layout() == nullptr
+        ? 11 : card_->layout()->contentsMargins().right()) / 5);
+    const int topMargin = card_->layout() == nullptr
+        ? 10 : card_->layout()->contentsMargins().top();
+    close_->move(qMax(0, card_->width() - close_->width() - rightMargin), topMargin);
+    close_->raise();
 }
 
 } // namespace zhu_screen_pet

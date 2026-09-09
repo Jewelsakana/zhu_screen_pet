@@ -261,6 +261,27 @@ bool Database::migrate(QString* errorMessage)
         ok = ok && execute(QStringLiteral("UPDATE schema_version SET version = 4"), errorMessage);
         version = 4;
     }
+    if (ok && version < 5) {
+        ok = execute(QStringLiteral("ALTER TABLE memories ADD COLUMN updated_at TEXT"), errorMessage);
+        ok = ok && execute(QStringLiteral("ALTER TABLE memories ADD COLUMN category TEXT NOT NULL DEFAULT ''"), errorMessage);
+        ok = ok && execute(QStringLiteral("ALTER TABLE memories ADD COLUMN confidence REAL NOT NULL DEFAULT 0"), errorMessage);
+        ok = ok && execute(QStringLiteral("ALTER TABLE memories ADD COLUMN importance REAL NOT NULL DEFAULT 0"), errorMessage);
+        ok = ok && execute(QStringLiteral("ALTER TABLE memories ADD COLUMN source_kind TEXT NOT NULL DEFAULT ''"), errorMessage);
+        ok = ok && execute(QStringLiteral("ALTER TABLE memories ADD COLUMN source_reference TEXT NOT NULL DEFAULT ''"), errorMessage);
+        ok = ok && execute(QStringLiteral("UPDATE memories SET updated_at=created_at WHERE updated_at IS NULL"), errorMessage);
+        ok = ok && execute(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_memories_filter ON memories(kind,category,importance DESC,updated_at DESC)"), errorMessage);
+        ok = ok && execute(QStringLiteral("ALTER TABLE observation_events ADD COLUMN capture_id TEXT NOT NULL DEFAULT ''"), errorMessage);
+        ok = ok && execute(QStringLiteral("ALTER TABLE observation_events ADD COLUMN source TEXT NOT NULL DEFAULT 'primary_screen'"), errorMessage);
+        ok = ok && execute(QStringLiteral("ALTER TABLE observation_events ADD COLUMN app_hint TEXT NOT NULL DEFAULT ''"), errorMessage);
+        ok = ok && execute(QStringLiteral("ALTER TABLE observation_events ADD COLUMN model_request_id TEXT NOT NULL DEFAULT ''"), errorMessage);
+        ok = ok && execute(QStringLiteral("ALTER TABLE observation_events ADD COLUMN model_provider TEXT NOT NULL DEFAULT ''"), errorMessage);
+        ok = ok && execute(QStringLiteral("ALTER TABLE observation_events ADD COLUMN image_format TEXT NOT NULL DEFAULT ''"), errorMessage);
+        ok = ok && execute(QStringLiteral("ALTER TABLE observation_events ADD COLUMN image_width INTEGER NOT NULL DEFAULT 0"), errorMessage);
+        ok = ok && execute(QStringLiteral("ALTER TABLE observation_events ADD COLUMN image_height INTEGER NOT NULL DEFAULT 0"), errorMessage);
+        ok = ok && execute(QStringLiteral("ALTER TABLE observation_events ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0"), errorMessage);
+        ok = ok && execute(QStringLiteral("UPDATE schema_version SET version = 5"), errorMessage);
+        version = 5;
+    }
     if (!ok || !database_.commit()) {
         database_.rollback();
         if (errorMessage != nullptr && errorMessage->isEmpty()) {

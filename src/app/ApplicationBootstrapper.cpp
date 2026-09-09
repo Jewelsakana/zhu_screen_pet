@@ -5,10 +5,13 @@
 #include <QFile>
 #include <QIcon>
 #include <QMessageBox>
+#include <QTimer>
 
 #include "app/ChatController.h"
 #include "app/ConversationController.h"
 #include "app/LegacyDataMigrator.h"
+#include "app/MemoryMaintenanceService.h"
+#include "app/PetLifecycleController.h"
 #include "app/PersonaConfig.h"
 #include "app/SettingsController.h"
 #include "app/AppConfigRepository.h"
@@ -93,6 +96,17 @@ bool ApplicationBootstrapper::initialize(AppError* error)
         QStringLiteral("无法打开本地数据库"), 0, ErrorDomain::Database, technical,
         QStringLiteral("bootstrap.database"), {}, false}, error);
 
+    petLifecycle_ = std::make_unique<PetLifecycleController>(settings_.get(), this);
+    if (!petLifecycle_->initialize(&technical)) return fail({
+        AppErrorCode::ConfigInvalid, QStringLiteral("无法读取宠物等级进度"), 0,
+        ErrorDomain::Configuration, technical,
+        QStringLiteral("bootstrap.pet_lifecycle"), {}, false}, error);
+    connect(petLifecycle_.get(), &PetLifecycleController::persistenceFailed,
+            this, [this](const QString& detail) {
+                logger_.warning(QStringLiteral("pet"), QStringLiteral("progress_save_failed"),
+                                detail, QStringLiteral("CONFIG_SAVE"));
+            });
+
     conversations_ = std::make_unique<SqliteConversationRepository>(database_.get());
     memories_ = std::make_unique<SqliteMemoryRepository>(database_.get());
     observations_ = std::make_unique<SqliteObservationRepository>(database_.get());
@@ -124,6 +138,16 @@ bool ApplicationBootstrapper::initialize(AppError* error)
         QStringLiteral("bootstrap.provider"), {}, false}, error);
 
     chatController_ = std::make_unique<ChatController>(providerManager_.get(), memoryOrchestrator_.get());
+    memoryMaintenance_ = std::make_unique<MemoryMaintenanceService>(
+        providerManager_.get(), memoryOrchestrator_.get(), this);
+    connect(chatController_.get(), &ChatController::conversationTurnCompleted,
+            memoryMaintenance_.get(), &MemoryMaintenanceService::schedule);
+    connect(memoryMaintenance_.get(), &MemoryMaintenanceService::maintenanceFailed,
+            this, [this](const QString& conversationId, const QString& detail) {
+                logger_.warning(QStringLiteral("memory"), QStringLiteral("maintenance_retry_scheduled"),
+                                QStringLiteral("%1: %2").arg(conversationId, detail),
+                                QStringLiteral("MEMORY_MAINTENANCE"));
+            });
     PersonaConfig persona;
     QString appConfigPath = qEnvironmentVariable("ZHU_SCREEN_PET_APP_CONFIG").trimmed();
     if (appConfigPath.isEmpty()) appConfigPath = paths_.appConfigPath();
@@ -134,6 +158,7 @@ bool ApplicationBootstrapper::initialize(AppError* error)
     if (!appConfigRepository_->load(&persona, &modelErrorMessages_, &technical, &limits, &uiConfig)) return fail({AppErrorCode::ConfigInvalid,
         QStringLiteral("应用配置无效"), 0, ErrorDomain::Configuration, technical,
         QStringLiteral("bootstrap.app_config"), {}, false}, error);
+    petLifecycle_->setUserAddress(persona.userAddress);
     if (!memoryOrchestrator_->setLimits(limits, &technical)) return fail({AppErrorCode::ConfigInvalid,
         QStringLiteral("记忆配置无效"), 0, ErrorDomain::Memory, technical,
         QStringLiteral("bootstrap.memory_config"), {}, false}, error);
@@ -157,12 +182,18 @@ bool ApplicationBootstrapper::initialize(AppError* error)
     conversationController_ = std::make_unique<ConversationController>(conversations_.get(), settings_.get());
     conversationController_->setChatController(chatController_.get());
     if (!conversationController_->initialize(&errorValue)) return fail(errorValue, error);
+    memoryMaintenance_->schedule(conversationController_->currentConversationId());
     connect(conversationController_.get(), &ConversationController::operationFailed,
             &errorCenter_, &ErrorCenter::report);
     settingsController_ = std::make_unique<SettingsController>(
         modelConfigs_.get(), appConfigRepository_.get(), providerFactory_.get(), providerManager_.get(),
         chatController_.get(), memoryOrchestrator_.get(), secretStore_.get(), &errorCenter_);
     settingsController_->setInitialUiConfig(uiConfig);
+    connect(settingsController_.get(), &SettingsController::settingsApplied,
+            petLifecycle_.get(), [this](const ModelProviderConfig&, const PersonaConfig& updated,
+                                        const MemoryLimits&) {
+                petLifecycle_->setUserAddress(updated.userAddress);
+            });
     connect(settingsController_.get(), &SettingsController::operationFailed,
             &errorCenter_, &ErrorCenter::report);
 
@@ -173,6 +204,7 @@ bool ApplicationBootstrapper::initialize(AppError* error)
     window_->setChatController(chatController_.get());
     window_->setConversationController(conversationController_.get());
     window_->setSettingsController(settingsController_.get());
+    window_->setPetLifecycleController(petLifecycle_.get());
     windowManager_ = std::make_unique<WindowManager>(settings_.get());
     windowManager_->restore(window_.get());
     trayController_ = std::make_unique<TrayController>();
@@ -209,6 +241,11 @@ int ApplicationBootstrapper::run()
     if (!initialized_) return 1;
     window_->showPetShell();
     trayController_->show();
+    // 首次创建透明气泡必须等 Windows/Qt 完成顶层窗口的样式和透明合成，
+    // 否则启动问候的第一帧可能短暂显示成未裁剪的方形背景。
+    QTimer::singleShot(0, this, [this]() {
+        if (!quitRequested_ && petLifecycle_ != nullptr) petLifecycle_->start();
+    });
     return application_->exec();
 }
 
@@ -225,9 +262,15 @@ void ApplicationBootstrapper::persistApplicationState()
 {
     if (statePersisted_) return;
     statePersisted_ = true;
-    if (windowManager_ == nullptr || window_ == nullptr) return;
     QString saveError;
-    if (!windowManager_->save(window_.get(), &saveError) && !saveError.isEmpty()) {
+    if (petLifecycle_ != nullptr && !petLifecycle_->shutdown(&saveError)
+        && !saveError.isEmpty()) {
+        logger_.error(QStringLiteral("pet"), QStringLiteral("progress_save_failed"), saveError,
+                      QStringLiteral("CONFIG_SAVE"));
+    }
+    saveError.clear();
+    if (windowManager_ != nullptr && window_ != nullptr
+        && !windowManager_->save(window_.get(), &saveError) && !saveError.isEmpty()) {
         logger_.error(QStringLiteral("window"), QStringLiteral("position_save_failed"), saveError,
                       QStringLiteral("CONFIG_SAVE"));
     }

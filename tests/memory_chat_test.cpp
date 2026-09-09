@@ -8,6 +8,7 @@
 
 #include "app/AppConfigRepository.h"
 #include "app/ChatController.h"
+#include "app/MemoryMaintenanceService.h"
 #include "app/PersonaConfig.h"
 #include "infrastructure/Database.h"
 #include "memory/MemoryOrchestrator.h"
@@ -67,7 +68,8 @@ private slots:
         firstObservation.fingerprint = QByteArrayLiteral("fingerprint-1");
         firstObservation.capturedAt = capturedAt;
         firstObservation.expiresAt = capturedAt.addSecs(600);
-        QVERIFY(observations.saveResult(firstObservation));
+        const auto firstObservationSave = observations.saveResult(firstObservation);
+        QVERIFY2(firstObservationSave, qPrintable(firstObservationSave.error().technicalMessage));
         ObservationEvent secondObservation = firstObservation;
         secondObservation.id = QStringLiteral("event-2");
         secondObservation.summary = QStringLiteral("屏幕上显示咖啡记录");
@@ -636,6 +638,96 @@ private slots:
             conversationId, capturedAt.addSecs(1));
         QVERIFY(latest);
         QVERIFY(!latest.value().has_value());
+    }
+
+    void automaticSummaryPersistsFactsAndMarksOnlyCompressedMessages()
+    {
+        QTemporaryDir directory; QVERIFY(directory.isValid());
+        Database database; QVERIFY(database.open(directory.filePath(QStringLiteral("automatic-summary.sqlite"))));
+        SqliteConversationRepository conversations(&database); SqliteMemoryRepository memories(&database);
+        MemoryOrchestrator memory(&conversations, &memories); MemoryLimits limits;
+        limits.summaryMessageThreshold = 8; limits.summaryTokenThreshold = 128000;
+        QVERIFY(memory.setLimits(limits));
+        const QString conversationId = conversations.createConversation(QStringLiteral("摘要测试"));
+        QVERIFY(!conversationId.isEmpty());
+        for (int index = 0; index < 10; ++index) {
+            const MessageRole role = index % 2 == 0 ? MessageRole::User : MessageRole::Assistant;
+            QVERIFY(memory.appendMessage(conversationId, Message::create(
+                role, QStringLiteral("消息 %1").arg(index))));
+        }
+        MockChatProvider provider(QStringLiteral(
+            R"({"summary":"用户正在测试自动摘要。","facts":[{"content":"用户偏好使用自动摘要","category":"preference","confidence":0.95,"importance":0.8}]})"));
+        MemoryMaintenanceService service(&provider, &memory);
+        QSignalSpy completed(&service, &MemoryMaintenanceService::maintenanceCompleted);
+        service.schedule(conversationId); QVERIFY(completed.wait(1000));
+        QCOMPARE(completed.first().at(1).toInt(), 4);
+        const QVector<ConversationMessage> pending = conversations.unsummarizedMessages(conversationId, 100);
+        QCOMPARE(pending.size(), 6);
+        const std::optional<MemoryItem> summary = memories.conversationSummary(conversationId);
+        QVERIFY(summary.has_value()); QCOMPARE(summary->content, QStringLiteral("用户正在测试自动摘要。"));
+        const QVector<MemoryItem> longTerm = memories.searchLongTerm(QString{}, 100);
+        QCOMPARE(longTerm.size(), 2);
+
+        for (int index = 10; index < 14; ++index) {
+            const MessageRole role = index % 2 == 0 ? MessageRole::User : MessageRole::Assistant;
+            QVERIFY(memory.appendMessage(conversationId, Message::create(
+                role, QStringLiteral("消息 %1").arg(index))));
+        }
+        service.schedule(conversationId); QTRY_COMPARE_WITH_TIMEOUT(completed.size(), 2, 1000);
+        QCOMPARE(memories.searchLongTerm(QString{}, 100).size(), 2);
+    }
+
+    void shortTermCleanupRemovesExpiredOverflowAndOldSummarizedMessages()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        Database database;
+        QVERIFY(database.open(directory.filePath(QStringLiteral("short-term-cleanup.sqlite"))));
+        SqliteConversationRepository conversations(&database);
+        SqliteMemoryRepository memories(&database);
+        MemoryOrchestrator memory(&conversations, &memories);
+        const QDateTime now = QDateTime::currentDateTimeUtc();
+
+        const qint64 defaultExpiryId = memories.saveShortTerm(
+            QStringLiteral("默认过期时间"));
+        QVERIFY(defaultExpiryId > 0);
+        const MemoryItem defaultExpiry = memories.get(defaultExpiryId);
+        QVERIFY(defaultExpiry.expiresAt.isValid());
+        const qint64 retention = now.secsTo(defaultExpiry.expiresAt);
+        QVERIFY(retention >= MemoryLimits::ShortTermRetentionSeconds - 5);
+        QVERIFY(retention <= MemoryLimits::ShortTermRetentionSeconds + 5);
+
+        QVERIFY(memories.saveShortTerm(QStringLiteral("已过期"), {}, now.addSecs(-1)) > 0);
+        QVERIFY(memories.saveShortTerm(QStringLiteral("较旧保留项"), {}, now.addSecs(60)) > 0);
+        QVERIFY(memories.saveShortTerm(QStringLiteral("较新保留项"), {}, now.addSecs(60)) > 0);
+        const auto cleanup = memories.cleanupShortTermResult(now, 2);
+        QVERIFY(cleanup);
+        QCOMPARE(cleanup.value(), 2);
+        const QVector<MemoryItem> remaining = memories.searchShortTerm(QString{}, 10);
+        QCOMPARE(remaining.size(), 2);
+        QVERIFY(std::none_of(remaining.cbegin(), remaining.cend(), [](const MemoryItem& item) {
+            return item.content == QStringLiteral("已过期");
+        }));
+        QVERIFY(std::any_of(remaining.cbegin(), remaining.cend(), [](const MemoryItem& item) {
+            return item.content == QStringLiteral("较新保留项");
+        }));
+
+        const QString conversationId = conversations.createConversation(QStringLiteral("清理会话"));
+        for (int index = 0; index < 4; ++index) {
+            QVERIFY(memory.appendMessage(conversationId, Message::create(
+                index % 2 == 0 ? MessageRole::User : MessageRole::Assistant,
+                QStringLiteral("待清理消息 %1").arg(index))));
+        }
+        const QVector<ConversationMessage> messages = conversations.recentMessages(
+            conversationId, 10);
+        QVector<qint64> summarizedIds{messages.at(0).id, messages.at(1).id};
+        QVERIFY(conversations.markMessagesSummarized(
+            summarizedIds, now.addSecs(-MemoryLimits::ShortTermRetentionSeconds - 1)));
+        QCOMPARE(memory.cleanupShortTermMemories(), 2);
+        const QVector<ConversationMessage> after = conversations.recentMessages(
+            conversationId, 10);
+        QCOMPARE(after.size(), 2);
+        QCOMPARE(after.first().message.content, QStringLiteral("待清理消息 2"));
     }
 
 };
