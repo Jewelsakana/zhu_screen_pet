@@ -23,6 +23,8 @@ signals:
     void conversationsRequested();
     void screenCaptureToggled(bool enabled);
     void captureOnChatToggled(bool enabled);
+    void shopRequested();
+    void backpackRequested();
 
 private:
     QPushButton* screenCapture_ = nullptr;

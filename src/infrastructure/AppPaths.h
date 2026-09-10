@@ -28,6 +28,8 @@ public:
     QString modelConfigPath() const;
     /** 返回人格和用户提示 JSON 配置路径。 */
     QString appConfigPath() const;
+    /** 返回商店商品目录 JSON 配置路径。 */
+    QString shopCatalogPath() const;
     /** 返回日志目录。 */
     QString logDirectory() const;
     /** 返回截图目录。 */

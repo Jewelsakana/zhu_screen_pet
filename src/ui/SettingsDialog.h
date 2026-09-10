@@ -60,6 +60,7 @@ private:
     QSpinBox* summaryTokenThreshold_ = nullptr;
     QSpinBox* bubbleDurationSeconds_ = nullptr;
     QSpinBox* windowScalePercent_ = nullptr;
+    QCheckBox* autoStartEnabled_ = nullptr;
     QCheckBox* screenCaptureEnabled_ = nullptr;
     QCheckBox* automaticScreenAnalysisEnabled_ = nullptr;
     QSpinBox* screenCaptureIntervalSeconds_ = nullptr;

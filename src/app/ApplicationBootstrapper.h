@@ -13,6 +13,8 @@ class QApplication;
 namespace zhu_screen_pet {
 
 class SettingsRepository;
+class AutoStartManager;
+class InputActivityMonitor;
 class AppConfigRepository;
 class Database;
 class HttpClient;
@@ -26,6 +28,11 @@ class SqliteObservationRepository;
 class MemoryOrchestrator;
 class MemoryMaintenanceService;
 class PetLifecycleController;
+class AffectionController;
+class InputActivityController;
+class PetEconomyController;
+class SatietyController;
+class ShopCatalogRepository;
 class ChatController;
 class ConversationController;
 class SettingsController;
@@ -60,6 +67,13 @@ private:
     Logger logger_;
     ErrorCenter errorCenter_;
     std::unique_ptr<SettingsRepository> settings_;
+    std::unique_ptr<AutoStartManager> autoStartManager_;
+    std::unique_ptr<InputActivityMonitor> inputActivityMonitor_;
+    std::unique_ptr<InputActivityController> inputActivity_;
+    std::unique_ptr<AffectionController> affection_;
+    std::unique_ptr<SatietyController> satiety_;
+    std::unique_ptr<ShopCatalogRepository> shopCatalog_;
+    std::unique_ptr<PetEconomyController> petEconomy_;
     std::unique_ptr<AppConfigRepository> appConfigRepository_;
     std::unique_ptr<Database> database_;
     std::unique_ptr<SqliteConversationRepository> conversations_;

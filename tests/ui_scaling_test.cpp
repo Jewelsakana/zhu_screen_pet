@@ -123,7 +123,7 @@ private slots:
         QTest::qWait(20);
         QVERIFY(panel.styleSheet().contains(QStringLiteral("border-radius:8px")));
         const QList<QPushButton*> buttons = panel.findChildren<QPushButton*>();
-        QCOMPARE(buttons.size(), 6);
+        QCOMPARE(buttons.size(), 8);
         for (QPushButton* button : buttons) {
             const QFontMetrics metrics(button->font());
             QVERIFY2(button->contentsRect().width() >= metrics.horizontalAdvance(button->text()),

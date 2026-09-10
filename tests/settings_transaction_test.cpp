@@ -1,6 +1,7 @@
 #include <QtTest/QtTest>
 
 #include <QComboBox>
+#include <QCheckBox>
 #include <QDir>
 #include <QFile>
 #include <QGroupBox>
@@ -29,6 +30,7 @@
 #include "model/ModelConfigRepository.h"
 #include "model/ProviderManager.h"
 #include "ui/MainWindow.h"
+#include "ui/FirstRunWizard.h"
 #include "ui/SettingsDialog.h"
 
 namespace zhu_screen_pet {
@@ -141,6 +143,18 @@ private slots:
         auto* userAddress = dialog.findChild<QLineEdit*>(QStringLiteral("settingsUserAddress"));
         auto* windowScale = dialog.findChild<QSpinBox*>(QStringLiteral("settingsMainWindowScale"));
         QVERIFY(personaGroup != nullptr && userAddress != nullptr && windowScale != nullptr);
+        auto* autoStart = dialog.findChild<QCheckBox*>(
+            QStringLiteral("settingsAutoStartEnabled"));
+        QVERIFY(autoStart != nullptr);
+        QVERIFY(!autoStart->isEnabled());
+        FirstRunWizard wizard(&settings);
+        QVERIFY(wizard.findChild<QLineEdit*>(QStringLiteral("onboardingUserAddress")) != nullptr);
+        QVERIFY(wizard.findChild<QComboBox*>(QStringLiteral("onboardingModelProfile")) != nullptr);
+        QVERIFY(wizard.findChild<QLineEdit*>(QStringLiteral("onboardingApiKey")) != nullptr);
+        QVERIFY(wizard.findChild<QCheckBox*>(
+            QStringLiteral("onboardingScreenCaptureEnabled")) != nullptr);
+        QVERIFY(wizard.findChild<QCheckBox*>(
+            QStringLiteral("onboardingAutoStartEnabled")) != nullptr);
         QCOMPARE(windowScale->value(), 125);
         QStringList personaLabels;
         for (const QLabel* label : personaGroup->findChildren<QLabel*>()) {

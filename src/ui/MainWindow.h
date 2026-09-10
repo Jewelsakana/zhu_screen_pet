@@ -27,6 +27,8 @@ class QWidget;
 namespace zhu_screen_pet {
 
 class ActionPanel;
+class AffectionController;
+class BackpackWindow;
 class ChatController;
 class ChatInputPanel;
 class CaptureUiController;
@@ -35,10 +37,16 @@ class ConversationWindow;
 class ErrorBannerWindow;
 class ErrorCenter;
 class HoverRevealController;
+class InputActivityController;
+class InputActivityPanel;
 class PetWindowResizeController;
+class PetAnimationPlayer;
 class PetLifecycleController;
+class PetEconomyController;
 class LevelProgressWidget;
 class ReplyBubbleWindow;
+class SatietyController;
+class ShopWindow;
 class SettingsController;
 class ScreenCapture;
 class ScreenObservationCoordinator;
@@ -59,6 +67,10 @@ public:
     void setConversationController(ConversationController* controller);
     void setSettingsController(SettingsController* controller);
     void setPetLifecycleController(PetLifecycleController* controller);
+    void setAffectionController(AffectionController* controller);
+    void setSatietyController(SatietyController* controller);
+    void setPetEconomyController(PetEconomyController* controller);
+    void setInputActivityController(InputActivityController* controller);
     void setCaptureDirectory(const QString& directory);
     void setModelErrorMessages(const QHash<QString, QString>& messages);
     void setConversation(const QString& conversationId,
@@ -71,6 +83,8 @@ public:
     void openSettings();
     /** 托盘或操作栏调用的完整会话入口。 */
     void openConversationWindow();
+    void openShopWindow();
+    void openBackpackWindow();
 
 signals:
     /** 操作栏关闭按钮或系统任务栏关闭动作请求结束整个应用。 */
@@ -90,6 +104,7 @@ private:
     void createOverlayWindows();
     QWidget* createHotZone(const QString& objectName, const QSize& size);
     void repositionConversationChain();
+    void repositionInputActivityPanel();
     void applyUiConfig(const UiConfig& config);
     void applyWindowScale();
     void persistInteractiveScale();
@@ -113,10 +128,15 @@ private:
     void updatePetState(PetState state);
     void showStartupGreeting(const QString& text);
     void showLevelUp(int level);
+    void showItemThanks(const QString& itemName);
     void refreshStateLabel();
     bool isCurrentRequest(const QString& requestId) const;
 
     ChatController* chatController_ = nullptr;
+    AffectionController* affectionController_ = nullptr;
+    SatietyController* satietyController_ = nullptr;
+    PetEconomyController* petEconomyController_ = nullptr;
+    InputActivityController* inputActivityController_ = nullptr;
     ErrorCenter* errorCenter_ = nullptr;
     ConversationController* conversationController_ = nullptr;
     SettingsController* settingsController_ = nullptr;
@@ -127,6 +147,7 @@ private:
     bool currentRequestIsScreenshot_ = false;
     UiConfig uiConfig_;
     QPixmap petAvatarPixmap_;
+    PetAnimationPlayer* animationPlayer_ = nullptr;
 
     QLabel* stateLabel_ = nullptr;
     QLabel* petVisual_ = nullptr;
@@ -146,6 +167,9 @@ private:
     PetWindowResizeController* resizeController_ = nullptr;
     PetLifecycleController* petLifecycleController_ = nullptr;
     LevelProgressWidget* levelProgress_ = nullptr;
+    LevelProgressWidget* affectionProgress_ = nullptr;
+    LevelProgressWidget* satietyProgress_ = nullptr;
+    InputActivityPanel* inputActivityPanel_ = nullptr;
     QTimer* levelUpTimer_ = nullptr;
     PetState petState_ = PetState::Idle;
     QString idleDescription_ = QStringLiteral("摸鱼中~");

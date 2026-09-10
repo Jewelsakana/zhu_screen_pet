@@ -189,6 +189,18 @@ SettingsDialog::SettingsDialog(SettingsController* controller, QWidget* parent,
     uiForm->addRow(QStringLiteral("回复气泡显示时间"), bubbleDurationSeconds_);
     uiForm->addRow(QStringLiteral("主窗口及附属窗口缩放"), windowScalePercent_);
 
+    auto* systemBox = new QGroupBox(QStringLiteral("系统"), content);
+    auto* systemForm = new QFormLayout(systemBox);
+    autoStartEnabled_ = new QCheckBox(
+        QStringLiteral("登录 Windows 后自动启动小珠看着你"), systemBox);
+    autoStartEnabled_->setObjectName(QStringLiteral("settingsAutoStartEnabled"));
+    autoStartEnabled_->setEnabled(controller_ != nullptr
+                                  && controller_->autoStartSupported());
+    if (!autoStartEnabled_->isEnabled()) {
+        autoStartEnabled_->setToolTip(QStringLiteral("当前系统不支持此功能"));
+    }
+    systemForm->addRow(autoStartEnabled_);
+
     auto* captureBox = new QGroupBox(QStringLiteral("屏幕截图"), content);
     auto* captureForm = new QFormLayout(captureBox);
     screenCaptureEnabled_ = new QCheckBox(
@@ -312,6 +324,7 @@ SettingsDialog::SettingsDialog(SettingsController* controller, QWidget* parent,
     contentLayout->addWidget(personaBox);
     contentLayout->addWidget(memoryBox);
     contentLayout->addWidget(uiBox);
+    contentLayout->addWidget(systemBox);
     contentLayout->addWidget(captureBox);
     root->addWidget(scrollArea, 1);
     root->addLayout(buttons);
@@ -378,6 +391,7 @@ void SettingsDialog::populate()
     bubbleDurationSeconds_->setValue(controller_->uiConfig().replyBubbleDurationMs / 1000);
     const UiConfig ui = controller_->uiConfig();
     windowScalePercent_->setValue(ui.windowScalePercent);
+    autoStartEnabled_->setChecked(controller_->autoStartEnabled());
     screenCaptureEnabled_->setChecked(ui.screenCaptureEnabled);
     automaticScreenAnalysisEnabled_->setChecked(ui.automaticScreenAnalysisEnabled);
     automaticScreenAnalysisEnabled_->setEnabled(ui.screenCaptureEnabled);
@@ -461,6 +475,8 @@ void SettingsDialog::applySettings()
     ui.captureMaxWidth = captureMaxWidth_->value();
     ui.captureQuality = captureQuality_->value();
     const UiConfig previousUi = controller_->uiConfig();
+    const bool previousAutoStart = controller_->autoStartEnabled();
+    const bool requestedAutoStart = autoStartEnabled_->isChecked();
     const bool enablesRemoteCapture = ui.screenCaptureEnabled
         && ((ui.automaticScreenAnalysisEnabled
              && !previousUi.automaticScreenAnalysisEnabled)
@@ -473,7 +489,21 @@ void SettingsDialog::applySettings()
         return;
     }
     AppError error;
+    if (controller_->autoStartSupported()
+        && previousAutoStart != requestedAutoStart
+        && !controller_->setAutoStartEnabled(requestedAutoStart, &error)) {
+        showError(error);
+        return;
+    }
     if (!controller_->apply(model, persona, limits, ui, apiKey_->text(), &error)) {
+        if (controller_->autoStartSupported()
+            && previousAutoStart != requestedAutoStart) {
+            AppError rollbackError;
+            if (!controller_->setAutoStartEnabled(previousAutoStart, &rollbackError)) {
+                error.message += QStringLiteral("；开机自启回滚失败：%1")
+                    .arg(rollbackError.message);
+            }
+        }
         if (error.code == AppErrorCode::Busy) {
             const auto answer = QMessageBox::question(
                 this, QStringLiteral("正在生成回复"),

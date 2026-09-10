@@ -16,6 +16,7 @@
 namespace zhu_screen_pet {
 
 class AppConfigRepository;
+class AutoStartManager;
 class ChatController;
 class ChatProvider;
 class ChatProviderFactory;
@@ -39,12 +40,18 @@ public:
                        MemoryOrchestrator* memory,
                        SecretStore* secretStore,
                        ErrorCenter* errorCenter,
+                       AutoStartManager* autoStartManager = nullptr,
                        QObject* parent = nullptr);
 
     ModelProviderConfig activeModel() const;
     PersonaConfig persona() const;
     MemoryLimits memoryLimits() const;
     UiConfig uiConfig() const;
+    bool autoStartSupported() const;
+    bool autoStartEnabled() const;
+    bool setAutoStartEnabled(bool enabled, AppError* error = nullptr);
+    /** 好感升级奖励只提高主动程度，不会覆盖用户已经设置的更高值。 */
+    bool applyProactivityReward(int proactiveLevel, AppError* error = nullptr);
     QStringList modelProfileIds(QString* errorMessage = nullptr) const;
     bool loadModelProfile(const QString& id, ModelProviderConfig* config,
                           QString* errorMessage = nullptr) const;
@@ -93,6 +100,7 @@ private:
     MemoryOrchestrator* memory_ = nullptr;
     SecretStore* secretStore_ = nullptr;
     ErrorCenter* errorCenter_ = nullptr;
+    AutoStartManager* autoStartManager_ = nullptr;
     std::unique_ptr<ChatProvider> testProvider_;
     QString testRequestId_;
     UiConfig uiConfig_;

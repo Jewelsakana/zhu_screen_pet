@@ -77,6 +77,8 @@ configure_file("${CMAKE_CURRENT_SOURCE_DIR}/config/model-providers.json"
                "${CMAKE_CURRENT_BINARY_DIR}/config/model-providers.json" COPYONLY)
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/config/app-settings.json"
                "${CMAKE_CURRENT_BINARY_DIR}/config/app-settings.json" COPYONLY)
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/config/shop-catalog.json"
+               "${CMAKE_CURRENT_BINARY_DIR}/config/shop-catalog.json" COPYONLY)
 
 # 保留源码自发现，但按目标分别发现；新增文件会重新配置，层间依赖由链接方向约束。
 file(GLOB_RECURSE ZHU_SCREEN_PET_CORE_SOURCES CONFIGURE_DEPENDS
@@ -96,6 +98,8 @@ file(GLOB_RECURSE ZHU_SCREEN_PET_RESOURCE_FILES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/*.qrc")
 file(GLOB ZHU_SCREEN_PET_RUNTIME_IMAGE_FILES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/*.png")
+set(ZHU_SCREEN_PET_ANIMATION_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/animations")
 
 function(zhu_screen_pet_configure_target target)
     target_include_directories(${target} PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -169,6 +173,14 @@ if (ZHU_SCREEN_PET_RUNTIME_IMAGE_FILES)
         COMMENT "Deploying runtime image assets next to the executable"
         VERBATIM)
 endif()
+if (EXISTS "${ZHU_SCREEN_PET_ANIMATION_DIR}")
+    add_custom_command(TARGET zhu_screen_pet POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${ZHU_SCREEN_PET_ANIMATION_DIR}"
+            "$<TARGET_FILE_DIR:zhu_screen_pet>/animations"
+        COMMENT "Deploying PNG animation sequences next to the executable"
+        VERBATIM)
+endif()
 target_link_libraries(zhu_screen_pet PRIVATE zhu_screen_pet_ui zhu_screen_pet_app zhu_screen_pet_memory zhu_screen_pet_model
     zhu_screen_pet_infrastructure zhu_screen_pet_core Qt6::Widgets)
 set_target_properties(zhu_screen_pet PROPERTIES VERSION ${PROJECT_VERSION} OUTPUT_NAME "小珠看着你")
@@ -218,6 +230,9 @@ if (WIN32)
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 ${ZHU_SCREEN_PET_RUNTIME_IMAGE_FILES}
                 "${ZHU_SCREEN_PET_PORTABLE_DIR}"
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${ZHU_SCREEN_PET_ANIMATION_DIR}"
+                "${ZHU_SCREEN_PET_PORTABLE_DIR}/animations"
             COMMAND "${ZHU_SCREEN_PET_WINDEPLOYQT_EXECUTABLE}"
                 "$<IF:$<CONFIG:Debug>,--debug,--release>"
                 --no-compiler-runtime
@@ -288,4 +303,10 @@ if (ZHU_SCREEN_PET_BUILD_TESTS)
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/legacy_migration_test.cpp")
     zhu_screen_pet_add_test(zhu_screen_pet_screen_capture_test
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/screen_capture_test.cpp")
+    zhu_screen_pet_add_test(zhu_screen_pet_onboarding_animation_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/onboarding_animation_test.cpp")
+    zhu_screen_pet_add_test(zhu_screen_pet_activity_affection_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/activity_affection_test.cpp")
+    zhu_screen_pet_add_test(zhu_screen_pet_economy_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/economy_test.cpp")
 endif()

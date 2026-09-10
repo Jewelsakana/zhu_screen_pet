@@ -5,6 +5,7 @@
 #include "app/ErrorCenter.h"
 #include "app/AppConfigRepository.h"
 #include "model/ModelConfigRepository.h"
+#include "infrastructure/AutoStartManager.h"
 #include "infrastructure/SecretStore.h"
 #include "memory/MemoryOrchestrator.h"
 #include "model/ChatProvider.h"
@@ -22,10 +23,12 @@ SettingsController::SettingsController(ModelConfigRepository* modelRepository,
                                        MemoryOrchestrator* memory,
                                        SecretStore* secretStore,
                                        ErrorCenter* errorCenter,
+                                       AutoStartManager* autoStartManager,
                                        QObject* parent)
     : QObject(parent), modelRepository_(modelRepository), appRepository_(appRepository),
       factory_(factory), providerManager_(providerManager), chatController_(chatController),
-      memory_(memory), secretStore_(secretStore), errorCenter_(errorCenter)
+      memory_(memory), secretStore_(secretStore), errorCenter_(errorCenter),
+      autoStartManager_(autoStartManager)
 {
     qRegisterMetaType<ChatResult>("ChatResult");
 }
@@ -48,6 +51,61 @@ MemoryLimits SettingsController::memoryLimits() const
 UiConfig SettingsController::uiConfig() const
 {
     return uiConfig_;
+}
+
+bool SettingsController::autoStartSupported() const
+{
+    return autoStartManager_ != nullptr && autoStartManager_->isSupported();
+}
+
+bool SettingsController::autoStartEnabled() const
+{
+    return autoStartManager_ != nullptr && autoStartManager_->isEnabled();
+}
+
+bool SettingsController::setAutoStartEnabled(bool enabled, AppError* error)
+{
+    if (!autoStartSupported()) {
+        return fail(makeError(AppErrorCode::Unsupported,
+                              QStringLiteral("当前系统不支持开机自启设置"),
+                              QStringLiteral("automatic startup is unavailable"),
+                              QStringLiteral("settings.auto_start")), error);
+    }
+    QString technical;
+    if (autoStartManager_->setEnabled(enabled, &technical)) return true;
+    return fail(makeError(AppErrorCode::Io, QStringLiteral("无法更新开机自启设置"),
+                          technical, QStringLiteral("settings.auto_start")), error);
+}
+
+bool SettingsController::applyProactivityReward(int proactiveLevel, AppError* error)
+{
+    if (appRepository_ == nullptr || chatController_ == nullptr || memory_ == nullptr) {
+        return fail(makeError(AppErrorCode::NotReady, QStringLiteral("人格设置暂不可用"),
+                              QStringLiteral("persona dependencies are unavailable"),
+                              QStringLiteral("settings.affection_reward")), error);
+    }
+    const PersonaConfig previous = chatController_->personaConfig();
+    const int rewardedLevel = qBound(0, proactiveLevel, 3);
+    if (rewardedLevel <= previous.proactiveLevel) return true;
+    PersonaConfig updated = previous;
+    updated.proactiveLevel = rewardedLevel;
+
+    SettingsApplyTransaction transaction(modelRepository_, appRepository_, providerManager_,
+                                          chatController_, memory_, secretStore_);
+    AppError transactionError;
+    if (!transaction.executeUi(updated, memory_->limits(), uiConfig_, &transactionError)) {
+        return fail(transactionError, error);
+    }
+    QString technical;
+    if (!chatController_->setPersonaConfig(updated, &technical)) {
+        AppError rollbackError;
+        transaction.executeUi(previous, memory_->limits(), uiConfig_, &rollbackError);
+        return fail(makeError(AppErrorCode::ConfigInvalid,
+                              QStringLiteral("无法应用好感度主动程度奖励"), technical,
+                              QStringLiteral("settings.affection_reward_runtime")), error);
+    }
+    emit settingsApplied(activeModel(), updated, memory_->limits());
+    return true;
 }
 
 void SettingsController::setInitialUiConfig(const UiConfig& uiConfig)

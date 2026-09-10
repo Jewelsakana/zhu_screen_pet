@@ -3,6 +3,7 @@
 #include <QClipboard>
 #include <QCheckBox>
 #include <QCursor>
+#include <QDialog>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QLabel>
@@ -458,7 +459,6 @@ private slots:
         QVERIFY(!window.findChild<ReplyBubbleWindow*>(QStringLiteral("replyBubble"))->isVisible());
         QVERIFY(!window.findChild<ErrorBannerWindow*>(QStringLiteral("errorBanner"))->isVisible());
         QVERIFY(!conversations->isVisible());
-
         auto* openConversations = window.findChild<QPushButton*>(
             QStringLiteral("conversationManagerButton"));
         QVERIFY(openConversations != nullptr);
@@ -474,6 +474,36 @@ private slots:
         QVERIFY(!window.findChild<ReplyBubbleWindow*>(QStringLiteral("replyBubble"))->isVisible());
         QVERIFY(!window.findChild<ErrorBannerWindow*>(QStringLiteral("errorBanner"))->isVisible());
         QVERIFY(!conversations->isVisible());
+    }
+
+    void shopAndBackpackUseSettingsStyleModalLifecycle()
+    {
+        MainWindow window;
+        const auto verifyDialog = [&window](const QString& buttonName,
+                                             const QString& dialogName) {
+            auto* button = window.findChild<QPushButton*>(buttonName);
+            QVERIFY(button != nullptr);
+            bool found = false;
+            bool modal = false;
+            bool parentedToMainWindow = false;
+            QTimer::singleShot(0, &window, [&]() {
+                auto* dialog = window.findChild<QDialog*>(dialogName);
+                found = dialog != nullptr;
+                if (dialog != nullptr) {
+                    modal = dialog->isModal();
+                    parentedToMainWindow = dialog->parentWidget() == &window;
+                    dialog->accept();
+                }
+            });
+            button->click();
+            QVERIFY(found);
+            QVERIFY(modal);
+            QVERIFY(parentedToMainWindow);
+            QVERIFY(window.findChild<QDialog*>(dialogName) == nullptr);
+        };
+
+        verifyDialog(QStringLiteral("shopButton"), QStringLiteral("shopWindow"));
+        verifyDialog(QStringLiteral("backpackButton"), QStringLiteral("backpackWindow"));
     }
 
     void mainWindowDragIsClampedToAvailableScreen()

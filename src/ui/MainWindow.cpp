@@ -7,6 +7,7 @@
 #include <QEvent>
 #include <QGuiApplication>
 #include <QHideEvent>
+#include <QFileInfo>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QMessageBox>
@@ -21,26 +22,34 @@
 #include <QtMath>
 
 #include "app/ChatController.h"
+#include "app/AffectionController.h"
 #include "app/ConversationController.h"
 #include "app/ErrorCenter.h"
 #include "app/SettingsController.h"
 #include "app/ScreenObservationCoordinator.h"
 #include "app/PetLifecycleController.h"
+#include "app/InputActivityController.h"
+#include "app/PetEconomyController.h"
+#include "app/SatietyController.h"
 #include "infrastructure/DesktopWindowPolicy.h"
 #include "infrastructure/ScreenCapture.h"
 #include "infrastructure/WindowAttachmentManager.h"
 #include "infrastructure/WindowPlacement.h"
 #include "ui/ActionPanel.h"
+#include "ui/BackpackWindow.h"
 #include "ui/ChatInputPanel.h"
 #include "ui/CaptureUiController.h"
 #include "ui/ConversationWindow.h"
 #include "ui/ConversationHistoryWindow.h"
 #include "ui/ErrorBannerWindow.h"
 #include "ui/HoverRevealController.h"
+#include "ui/InputActivityPanel.h"
 #include "ui/PetWindowResizeController.h"
+#include "ui/PetAnimationPlayer.h"
 #include "ui/LevelProgressWidget.h"
 #include "ui/ReplyBubbleWindow.h"
 #include "ui/SettingsDialog.h"
+#include "ui/ShopWindow.h"
 #include "ui/UiScaleMetrics.h"
 
 namespace zhu_screen_pet {
@@ -74,9 +83,30 @@ MainWindow::MainWindow(QWidget* parent)
         "border-radius:72px;} QLabel{color:white;background:transparent;}"));
     auto* layout = new QVBoxLayout(surface);
     layout->setContentsMargins(24, 24, 24, 20);
-    levelProgress_ = new LevelProgressWidget(surface);
+    auto* progressRow = new QWidget(surface);
+    auto* progressLayout = new QHBoxLayout(progressRow);
+    progressLayout->setContentsMargins(0, 0, 0, 0);
+    progressLayout->setSpacing(8);
+    affectionProgress_ = new LevelProgressWidget(progressRow);
+    affectionProgress_->setObjectName(QStringLiteral("affectionProgress"));
+    affectionProgress_->setMaximumLevel(AffectionController::MaximumLevel);
+    affectionProgress_->setColors(QColor(QStringLiteral("#f5a9c6")),
+                                  QColor(QStringLiteral("#d9364f")));
+    affectionProgress_->setShowMaximumLabel(true);
+    affectionProgress_->setFixedSize(66, 66);
+    satietyProgress_ = new LevelProgressWidget(progressRow);
+    satietyProgress_->setObjectName(QStringLiteral("satietyProgress"));
+    satietyProgress_->setMaximumLevel(SatietyController::MaximumValue);
+    satietyProgress_->setColors(QColor(QStringLiteral("#f2c94c")),
+                                QColor(QStringLiteral("#7a5b00")));
+    satietyProgress_->setShowLevelPrefix(false);
+    satietyProgress_->setFixedSize(66, 66);
+    levelProgress_ = new LevelProgressWidget(progressRow);
     levelProgress_->setFixedSize(66, 66);
-    layout->addWidget(levelProgress_, 0, Qt::AlignHCenter);
+    progressLayout->addWidget(affectionProgress_);
+    progressLayout->addWidget(satietyProgress_);
+    progressLayout->addWidget(levelProgress_);
+    layout->addWidget(progressRow, 0, Qt::AlignHCenter);
     petVisual_ = new QLabel(QStringLiteral("ʕ •ᴥ• ʔ\n\n小 屏"), surface);
     petVisual_->setObjectName(QStringLiteral("petVisual"));
     petVisual_->setAlignment(Qt::AlignCenter);
@@ -87,6 +117,7 @@ MainWindow::MainWindow(QWidget* parent)
     petVisual_->setFont(petFont);
     // 断开图片尺寸对 QLabel 最小尺寸的约束，让头像可随窗口自由缩放。
     petVisual_->setMinimumSize(1, 1);
+    animationPlayer_ = new PetAnimationPlayer(petVisual_, this);
     stateLabel_ = new QLabel(QStringLiteral("空闲"), surface);
     stateLabel_->setObjectName(QStringLiteral("stateLabel"));
     stateLabel_->setAlignment(Qt::AlignCenter);
@@ -97,6 +128,7 @@ MainWindow::MainWindow(QWidget* parent)
     levelUpTimer_->setSingleShot(true);
     connect(levelUpTimer_, &QTimer::timeout, this, [this]() {
         showingLevelUp_ = false;
+        animationPlayer_->stopLevelUp();
         stateLabel_->setStyleSheet(QString{});
         refreshStateLabel();
     });
@@ -151,6 +183,7 @@ void MainWindow::createOverlayWindows()
 {
     actionPanel_ = new ActionPanel(this);
     inputPanel_ = new ChatInputPanel(this);
+    inputActivityPanel_ = new InputActivityPanel(this);
     replyBubble_ = new ReplyBubbleWindow(this);
     errorBanner_ = new ErrorBannerWindow(this);
     // 会话列表是无父级独立顶层窗口，不进入桌宠主窗口的 QWidget 子树。
@@ -159,6 +192,7 @@ void MainWindow::createOverlayWindows()
     inputHotZone_ = createHotZone(QStringLiteral("inputRevealHotZone"), QSize(420, 44));
     for (QWidget* window : {static_cast<QWidget*>(this), static_cast<QWidget*>(actionPanel_),
                             static_cast<QWidget*>(inputPanel_), static_cast<QWidget*>(replyBubble_),
+                            static_cast<QWidget*>(inputActivityPanel_),
                             static_cast<QWidget*>(errorBanner_), static_cast<QWidget*>(conversationWindow_),
                             actionHotZone_, inputHotZone_}) {
         captureUiController_->registerWindow(window);
@@ -168,6 +202,7 @@ void MainWindow::createOverlayWindows()
     connect(attachments_, &WindowAttachmentManager::attachmentPositioned,
             replyBubble_, [this](QWidget* window, AttachmentSide actualSide) {
                 if (window == replyBubble_) replyBubble_->setAttachmentSide(actualSide);
+                if (window == inputPanel_) repositionInputActivityPanel();
             });
     attachments_->attach(actionPanel_, {AttachmentSide::Right, AttachmentAlignment::Center, 12});
     attachments_->attach(actionHotZone_, {AttachmentSide::Right, AttachmentAlignment::Center, 3});
@@ -200,6 +235,10 @@ void MainWindow::createOverlayWindows()
             this, &MainWindow::toggleScreenCapture);
     connect(actionPanel_, &ActionPanel::captureOnChatToggled,
             this, &MainWindow::toggleCaptureOnChat);
+    connect(actionPanel_, &ActionPanel::shopRequested,
+            this, &MainWindow::openShopWindow);
+    connect(actionPanel_, &ActionPanel::backpackRequested,
+            this, &MainWindow::openBackpackWindow);
     connect(inputPanel_, &ChatInputPanel::sendRequested, this, &MainWindow::sendCurrentMessage);
     connect(inputPanel_, &ChatInputPanel::cancelRequested, this, &MainWindow::cancelCurrentRequest);
     connect(inputPanel_, &ChatInputPanel::retryRequested, this, &MainWindow::retryLastMessage);
@@ -250,6 +289,20 @@ void MainWindow::repositionConversationChain()
         history->move(placement.positions.at(1));
     }
     repositioningConversationChain_ = false;
+}
+
+void MainWindow::repositionInputActivityPanel()
+{
+    if (inputActivityPanel_ == nullptr || inputPanel_ == nullptr) return;
+    const UiScaleMetrics metrics(uiConfig_.windowScalePercent);
+    const QPoint desired(inputPanel_->x() + metrics.scaled(12),
+                         inputPanel_->y() - inputActivityPanel_->height()
+                             + metrics.scaled(5));
+    QScreen* targetScreen = QGuiApplication::screenAt(frameGeometry().center());
+    if (targetScreen == nullptr) targetScreen = QGuiApplication::primaryScreen();
+    inputActivityPanel_->move(targetScreen == nullptr ? desired
+        : WindowPlacement::clamp(targetScreen->availableGeometry(),
+                                 inputActivityPanel_->size(), desired));
 }
 
 void MainWindow::setChatController(ChatController* controller)
@@ -366,12 +419,18 @@ void MainWindow::applyUiConfig(const UiConfig& config)
     petAvatarPixmap_ = QPixmap(avatarPath);
     if (!petAvatarPixmap_.isNull()) {
         petVisual_->setText(QString{});
-        updatePetAvatar();
     } else {
         petAvatarPixmap_ = QPixmap{};
         petVisual_->setPixmap(QPixmap{});
         petVisual_->setText(QStringLiteral("ʕ •ᴥ• ʔ\n\n小 屏"));
     }
+    animationPlayer_->setFallbackPixmap(petAvatarPixmap_);
+    const QString animationRoot = avatarPath.isEmpty()
+        ? QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("animations"))
+        : QFileInfo(avatarPath).dir().filePath(QStringLiteral("animations"));
+    animationPlayer_->setAnimationRoot(animationRoot);
+    animationPlayer_->setState(petState_);
+    updatePetAvatar();
     if (conversationWindow_ != nullptr) {
         conversationWindow_->setConversationAvatarPath(
             resolveConfiguredAssetPath(uiConfig_.conversationAvatarPath));
@@ -401,6 +460,60 @@ void MainWindow::setPetLifecycleController(PetLifecycleController* controller)
     connect(petLifecycleController_, &PetLifecycleController::levelUp,
             this, &MainWindow::showLevelUp);
     refreshStateLabel();
+}
+
+void MainWindow::setAffectionController(AffectionController* controller)
+{
+    if (affectionController_ == controller) return;
+    if (affectionController_ != nullptr) {
+        disconnect(affectionController_, nullptr, this, nullptr);
+    }
+    affectionController_ = controller;
+    if (affectionController_ == nullptr) return;
+    affectionProgress_->setProgress(affectionController_->level(),
+                                    affectionController_->progressPercent());
+    connect(affectionController_, &AffectionController::progressChanged,
+            affectionProgress_, &LevelProgressWidget::setProgress);
+}
+
+void MainWindow::setSatietyController(SatietyController* controller)
+{
+    if (satietyController_ == controller) return;
+    if (satietyController_ != nullptr) disconnect(satietyController_, nullptr, this, nullptr);
+    satietyController_ = controller;
+    if (satietyController_ == nullptr) return;
+    satietyProgress_->setProgress(satietyController_->value(), satietyController_->value());
+    connect(satietyController_, &SatietyController::valueChanged,
+            this, [this](int value) { satietyProgress_->setProgress(value, value); });
+}
+
+void MainWindow::setPetEconomyController(PetEconomyController* controller)
+{
+    if (petEconomyController_ == controller) return;
+    if (petEconomyController_ != nullptr) {
+        disconnect(petEconomyController_, nullptr, this, nullptr);
+    }
+    petEconomyController_ = controller;
+    if (petEconomyController_ != nullptr) {
+        connect(petEconomyController_, &PetEconomyController::itemGiven,
+                this, &MainWindow::showItemThanks);
+    }
+}
+
+void MainWindow::setInputActivityController(InputActivityController* controller)
+{
+    if (inputActivityController_ == controller) return;
+    if (inputActivityController_ != nullptr) {
+        disconnect(inputActivityController_, nullptr, this, nullptr);
+    }
+    inputActivityController_ = controller;
+    if (inputActivityController_ == nullptr) return;
+    inputActivityPanel_->setCount(inputActivityController_->inputCount());
+    connect(inputActivityController_, &InputActivityController::countChanged,
+            this, [this](qint64 inputCount) {
+                inputActivityPanel_->setCount(inputCount);
+                repositionInputActivityPanel();
+            });
 }
 
 void MainWindow::toggleScreenCapture(bool enabled)
@@ -453,9 +566,18 @@ void MainWindow::applyWindowScale()
     petFont.setPointSizeF(25.0 * metrics.factor());
     petVisual_->setFont(petFont);
     levelProgress_->setFixedSize(metrics.scaled(66), metrics.scaled(66));
+    affectionProgress_->setFixedSize(metrics.scaled(66), metrics.scaled(66));
+    satietyProgress_->setFixedSize(metrics.scaled(66), metrics.scaled(66));
+    if (affectionProgress_->parentWidget() != nullptr) {
+        if (auto* progressLayout = qobject_cast<QHBoxLayout*>(
+                affectionProgress_->parentWidget()->layout())) {
+            progressLayout->setSpacing(metrics.scaled(8));
+        }
+    }
 
     actionPanel_->setUiScalePercent(percent);
     inputPanel_->setUiScalePercent(percent);
+    inputActivityPanel_->setUiScalePercent(percent);
     replyBubble_->setUiScalePercent(percent);
     errorBanner_->setUiScalePercent(percent);
     conversationWindow_->setUiScalePercent(percent);
@@ -478,17 +600,17 @@ void MainWindow::applyWindowScale()
         move(WindowPlacement::clamp(available, frameGeometry().size(), frameGeometry().topLeft()));
     }
     attachments_->reposition();
+    repositionInputActivityPanel();
     repositionConversationChain();
 }
 
 void MainWindow::updatePetAvatar()
 {
-    if (petAvatarPixmap_.isNull() || petVisual_ == nullptr) return;
+    if (petVisual_ == nullptr || animationPlayer_ == nullptr) return;
     QSize target = petVisual_->size();
     if (target.width() <= 0 || target.height() <= 0) target = size();
     if (target.width() <= 0 || target.height() <= 0) return;
-    petVisual_->setPixmap(petAvatarPixmap_.scaled(
-        target, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    animationPlayer_->setTargetSize(target);
 }
 
 void MainWindow::sendCurrentMessage()
@@ -688,6 +810,24 @@ void MainWindow::openConversationWindow()
     conversationWindow_->activateWindow();
 }
 
+void MainWindow::openShopWindow()
+{
+    ShopWindow dialog(this);
+    dialog.setController(petEconomyController_);
+    dialog.setUiScalePercent(uiConfig_.windowScalePercent);
+    captureUiController_->registerWindow(&dialog);
+    dialog.exec();
+}
+
+void MainWindow::openBackpackWindow()
+{
+    BackpackWindow dialog(this);
+    dialog.setController(petEconomyController_);
+    dialog.setUiScalePercent(uiConfig_.windowScalePercent);
+    captureUiController_->registerWindow(&dialog);
+    dialog.exec();
+}
+
 void MainWindow::hidePetShell()
 {
     actionReveal_->setActive(false);
@@ -696,15 +836,18 @@ void MainWindow::hidePetShell()
     errorBanner_->hide();
     conversationWindow_->hideAllHistoryWindows();
     conversationWindow_->hide();
+    inputActivityPanel_->hide();
     hide();
 }
 
 void MainWindow::showPetShell()
 {
     show();
+    inputActivityPanel_->show();
     raise();
     errorBanner_->restoreIfActive();
     attachments_->reposition();
+    repositionInputActivityPanel();
     actionReveal_->showTemporarily();
     inputReveal_->showTemporarily();
 }
@@ -712,6 +855,9 @@ void MainWindow::showPetShell()
 void MainWindow::updatePetState(PetState state)
 {
     petState_ = state;
+    if (!showingLevelUp_ && animationPlayer_ != nullptr) {
+        animationPlayer_->setState(state);
+    }
     refreshStateLabel();
 }
 
@@ -727,9 +873,21 @@ void MainWindow::showLevelUp(int level)
 {
     Q_UNUSED(level);
     showingLevelUp_ = true;
+    animationPlayer_->playLevelUp();
     stateLabel_->setStyleSheet(QStringLiteral("color:#ff3b30;font-weight:700;"));
     stateLabel_->setText(QStringLiteral("升级了！！！"));
     levelUpTimer_->start(10 * 1000);
+}
+
+void MainWindow::showItemThanks(const QString& itemName)
+{
+    if (itemName.trimmed().isEmpty()) return;
+    const QString userAddress = settingsController_ == nullptr
+        ? QStringLiteral("你") : settingsController_->persona().userAddress;
+    replyBubble_->beginReply();
+    replyBubble_->finishReply(QStringLiteral("谢谢%1，这是%2吗？谢谢你哦~我很喜欢这个！")
+                                  .arg(userAddress, itemName));
+    attachments_->reposition();
 }
 
 void MainWindow::refreshStateLabel()
@@ -820,6 +978,8 @@ void MainWindow::showEvent(QShowEvent* event)
     actionReveal_->setActive(true);
     inputReveal_->setActive(true);
     attachments_->reposition();
+    inputActivityPanel_->show();
+    repositionInputActivityPanel();
     actionReveal_->showTemporarily();
     inputReveal_->showTemporarily();
 }
@@ -830,6 +990,7 @@ void MainWindow::hideEvent(QHideEvent* event)
     inputReveal_->setActive(false);
     replyBubble_->hide();
     errorBanner_->hide();
+    inputActivityPanel_->hide();
     QMainWindow::hideEvent(event);
 }
 

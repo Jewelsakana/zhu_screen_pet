@@ -35,6 +35,8 @@ ActionPanel::ActionPanel(QWidget* parent)
     screenCapture_ = add(QStringLiteral("截图：已关闭"),
                          QStringLiteral("screenCaptureToggleButton"));
     screenCapture_->setCheckable(true);
+    auto* shop = add(QStringLiteral("🛍  商店"), QStringLiteral("shopButton"));
+    auto* backpack = add(QStringLiteral("🎒  背包"), QStringLiteral("backpackButton"));
     captureOnChat_ = add(QStringLiteral("随消息附图：不可用"),
                          QStringLiteral("captureOnChatToggleButton"));
     captureOnChat_->setCheckable(true);
@@ -44,6 +46,8 @@ ActionPanel::ActionPanel(QWidget* parent)
     connect(settings, &QPushButton::clicked, this, &ActionPanel::settingsRequested);
     connect(conversations, &QPushButton::clicked, this, &ActionPanel::conversationsRequested);
     connect(screenCapture_, &QPushButton::toggled, this, &ActionPanel::screenCaptureToggled);
+    connect(shop, &QPushButton::clicked, this, &ActionPanel::shopRequested);
+    connect(backpack, &QPushButton::clicked, this, &ActionPanel::backpackRequested);
     connect(captureOnChat_, &QPushButton::toggled, this, &ActionPanel::captureOnChatToggled);
     setUiScalePercent(100);
 }

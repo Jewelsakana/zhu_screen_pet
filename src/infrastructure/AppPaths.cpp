@@ -51,6 +51,10 @@ QString AppPaths::appConfigPath() const
 {
     return configDirectory() + QStringLiteral("/app-settings.json");
 }
+QString AppPaths::shopCatalogPath() const
+{
+    return configDirectory() + QStringLiteral("/shop-catalog.json");
+}
 QString AppPaths::logDirectory() const { return rootDirectory_ + QStringLiteral("/logs"); }
 QString AppPaths::captureDirectory() const { return rootDirectory_ + QStringLiteral("/captures"); }
 

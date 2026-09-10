@@ -1,0 +1,84 @@
+{
+  "version": 1,
+  "gifts": [
+    {
+      "id": "chocolate",
+      "emoji": "🍫",
+      "name": "巧克力",
+      "price": 500,
+      "affection_gain": 50
+    },
+    {
+      "id": "bouquet",
+      "emoji": "💐",
+      "name": "花束",
+      "price": 1000,
+      "affection_gain": 150
+    },
+    {
+      "id": "dress",
+      "emoji": "👗",
+      "name": "小裙子",
+      "price": 5000,
+      "affection_gain": 600
+    },
+    {
+      "id": "painting",
+      "emoji": "🖼️",
+      "name": "画",
+      "price": 10000,
+      "affection_gain": 1500
+    },
+    {
+      "id": "star",
+      "emoji": "⭐",
+      "name": "星星",
+      "price": 20000,
+      "affection_gain": 3000
+    },
+    {
+      "id": "diamond_ring",
+      "emoji": "💍",
+      "name": "钻戒",
+      "price": 50000,
+      "affection_gain": 7000
+    }
+  ],
+  "foods": [
+    {
+      "id": "watermelon",
+      "emoji": "🍉",
+      "name": "西瓜",
+      "price": 100,
+      "satiety_gain": 5
+    },
+    {
+      "id": "fries",
+      "emoji": "🍟",
+      "name": "薯条",
+      "price": 500,
+      "satiety_gain": 10
+    },
+    {
+      "id": "hamburger",
+      "emoji": "🍔",
+      "name": "汉堡",
+      "price": 1000,
+      "satiety_gain": 25
+    },
+    {
+      "id": "cake",
+      "emoji": "🍰",
+      "name": "蛋糕",
+      "price": 2000,
+      "satiety_gain": 50
+    },
+    {
+      "id": "steak",
+      "emoji": "🥩",
+      "name": "牛排",
+      "price": 4000,
+      "satiety_gain": 100
+    }
+  ]
+}

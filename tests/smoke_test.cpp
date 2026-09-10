@@ -165,6 +165,12 @@ private slots:
         MainWindow window;
         QCOMPARE(window.windowTitle(), QStringLiteral("小珠看着你"));
         QVERIFY(window.centralWidget() != nullptr);
+        QVERIFY(window.findChild<QWidget*>(QStringLiteral("affectionProgress")) != nullptr);
+        QVERIFY(window.findChild<QWidget*>(QStringLiteral("satietyProgress")) != nullptr);
+        QVERIFY(window.findChild<QWidget*>(QStringLiteral("inputActivityPanel")) != nullptr);
+        QVERIFY(window.findChild<QLabel*>(QStringLiteral("inputActivityCount")) != nullptr);
+        QVERIFY(window.findChild<QPushButton*>(QStringLiteral("shopButton")) != nullptr);
+        QVERIFY(window.findChild<QPushButton*>(QStringLiteral("backpackButton")) != nullptr);
     }
 
     void databaseInitializesSchema()
