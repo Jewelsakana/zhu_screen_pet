@@ -32,6 +32,7 @@
 #include "app/PetEconomyController.h"
 #include "app/SatietyController.h"
 #include "infrastructure/DesktopWindowPolicy.h"
+#include "infrastructure/Logger.h"
 #include "infrastructure/ScreenCapture.h"
 #include "infrastructure/WindowAttachmentManager.h"
 #include "infrastructure/WindowPlacement.h"
@@ -64,13 +65,15 @@ QString resolveConfiguredAssetPath(const QString& configuredPath)
 
 }
 
-MainWindow::MainWindow(QWidget* parent)
-    : QMainWindow(parent)
+MainWindow::MainWindow(QWidget* parent, Logger* startupLogger)
+    : QMainWindow(parent), startupLogger_(startupLogger)
 {
     setObjectName(QStringLiteral("petWindow"));
     setWindowTitle(QStringLiteral("小珠看着你"));
     // 主窗口保留任务栏入口；只有附属气泡和悬浮面板使用 Tool 窗口。
     DesktopWindowPolicy::apply(this, {true, true, true, true, false, false});
+    logStartupStage(QStringLiteral("main_window_policy_applied"),
+                    QStringLiteral("main window Qt flags configured"));
     const QRect available = QGuiApplication::primaryScreen()
         ? QGuiApplication::primaryScreen()->availableGeometry()
         : QRect(0, 0, 1920, 1080);
@@ -133,6 +136,8 @@ MainWindow::MainWindow(QWidget* parent)
         refreshStateLabel();
     });
     setCentralWidget(surface);
+    logStartupStage(QStringLiteral("main_window_surface_created"),
+                    QStringLiteral("main window widgets created"));
     setMouseTracking(true);
     surface->setMouseTracking(true);
     surface->installEventFilter(this);
@@ -163,7 +168,11 @@ MainWindow::MainWindow(QWidget* parent)
                 if (errorCenter_ != nullptr) errorCenter_->report(error);
                 else onOperationFailed(error);
             });
+    logStartupStage(QStringLiteral("main_window_controllers_created"),
+                    QStringLiteral("window controllers created"));
     createOverlayWindows();
+    logStartupStage(QStringLiteral("main_window_overlays_created"),
+                    QStringLiteral("attached windows created"));
 }
 
 MainWindow::~MainWindow()
@@ -179,8 +188,17 @@ MainWindow::~MainWindow()
     conversationWindow_ = nullptr;
 }
 
+void MainWindow::logStartupStage(const QString& event, const QString& message) const
+{
+    if (startupLogger_ != nullptr) {
+        startupLogger_->info(QStringLiteral("bootstrap"), event, message);
+    }
+}
+
 void MainWindow::createOverlayWindows()
 {
+    logStartupStage(QStringLiteral("overlay_widget_creation_started"),
+                    QStringLiteral("creating attached window widgets"));
     actionPanel_ = new ActionPanel(this);
     inputPanel_ = new ChatInputPanel(this);
     inputActivityPanel_ = new InputActivityPanel(this);
@@ -190,6 +208,8 @@ void MainWindow::createOverlayWindows()
     conversationWindow_ = new ConversationWindow();
     actionHotZone_ = createHotZone(QStringLiteral("actionRevealHotZone"), QSize(44, 220));
     inputHotZone_ = createHotZone(QStringLiteral("inputRevealHotZone"), QSize(420, 44));
+    logStartupStage(QStringLiteral("overlay_widgets_constructed"),
+                    QStringLiteral("attached window widgets constructed"));
     for (QWidget* window : {static_cast<QWidget*>(this), static_cast<QWidget*>(actionPanel_),
                             static_cast<QWidget*>(inputPanel_), static_cast<QWidget*>(replyBubble_),
                             static_cast<QWidget*>(inputActivityPanel_),
@@ -197,6 +217,8 @@ void MainWindow::createOverlayWindows()
                             actionHotZone_, inputHotZone_}) {
         captureUiController_->registerWindow(window);
     }
+    logStartupStage(QStringLiteral("overlay_capture_registration_completed"),
+                    QStringLiteral("attached windows registered for capture policy"));
     attachments_ = new WindowAttachmentManager(this);
     attachments_->beginUpdate();
     attachments_->setAnchor(this);
@@ -212,6 +234,8 @@ void MainWindow::createOverlayWindows()
     attachments_->attach(replyBubble_, {AttachmentSide::Left, AttachmentAlignment::Center, 14});
     attachments_->attach(errorBanner_, {AttachmentSide::Above, AttachmentAlignment::Center, 12});
     attachments_->endUpdate();
+    logStartupStage(QStringLiteral("overlay_attachment_registration_completed"),
+                    QStringLiteral("attached window placement rules registered"));
     actionReveal_ = new HoverRevealController(this);
     inputReveal_ = new HoverRevealController(this);
     actionReveal_->bind(actionPanel_, actionHotZone_);
@@ -226,6 +250,8 @@ void MainWindow::createOverlayWindows()
     actionPanel_->installEventFilter(this);
     conversationWindow_->installEventFilter(this);
     applyUiConfig(uiConfig_);
+    logStartupStage(QStringLiteral("overlay_initial_configuration_applied"),
+                    QStringLiteral("initial attached window configuration applied"));
 
     connect(actionPanel_, &ActionPanel::closeRequested,
             this, &MainWindow::applicationExitRequested);

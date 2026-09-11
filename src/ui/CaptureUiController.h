@@ -8,6 +8,7 @@
 #include "core/AppError.h"
 
 class QWidget;
+class QEvent;
 
 namespace zhu_screen_pet {
 
@@ -38,7 +39,12 @@ signals:
     void ownWindowExclusionStatusChanged(bool available, bool excluded,
                                          const QString& detail);
 
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
 private:
+    void applyRegisteredWindowExclusion(QWidget* window);
+    void reportWindowExclusionFailure(QWidget* window, const QString& detail);
     bool applyOwnWindowExclusion(bool excluded, QString* detail);
     bool saveUiConfig(const UiConfig& config, AppError* error);
 

@@ -53,7 +53,9 @@ private slots:
         CaptureUiController controller(&observation);
         QWidget window(nullptr, Qt::Window);
         window.setObjectName(QStringLiteral("capturePolicyWindow"));
+        QCOMPARE(window.internalWinId(), WId(0));
         controller.registerWindow(&window);
+        QCOMPARE(window.internalWinId(), WId(0));
         QSignalSpy statusSpy(
             &controller, &CaptureUiController::ownWindowExclusionStatusChanged);
         UiConfig config;
@@ -272,6 +274,7 @@ private slots:
     void desktopWindowPolicyAppliesTransparentOverlayFlags()
     {
         QWidget overlay;
+        QCOMPARE(overlay.internalWinId(), WId(0));
         DesktopWindowOptions options;
         options.frameless = true;
         options.translucentBackground = true;
@@ -281,6 +284,7 @@ private slots:
         options.mouseInputTransparent = true;
         QString error;
         QVERIFY2(DesktopWindowPolicy::apply(&overlay, options, &error), qPrintable(error));
+        QCOMPARE(overlay.internalWinId(), WId(0));
         QVERIFY(overlay.windowFlags().testFlag(Qt::FramelessWindowHint));
         QVERIFY(overlay.windowFlags().testFlag(Qt::WindowStaysOnTopHint));
         QCOMPARE(overlay.windowType(), Qt::Tool);

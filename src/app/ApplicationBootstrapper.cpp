@@ -271,7 +271,7 @@ bool ApplicationBootstrapper::initialize(AppError* error)
 
     logger_.info(QStringLiteral("bootstrap"), QStringLiteral("main_window_create_started"),
                  QStringLiteral("creating main and attached windows"));
-    window_ = std::make_unique<MainWindow>();
+    window_ = std::make_unique<MainWindow>(nullptr, &logger_);
     logger_.info(QStringLiteral("bootstrap"), QStringLiteral("main_window_create_completed"),
                  QStringLiteral("main and attached windows created"));
     window_->setCaptureDirectory(paths_.captureDirectory());

@@ -41,11 +41,16 @@ bool DesktopWindowPolicy::setMouseInputTransparent(QWidget* window, bool enabled
         return false;
     }
     window->setAttribute(Qt::WA_TransparentForMouseEvents, enabled);
+    // 在首次 show() 前通过 Qt 窗口标志记录策略，不要调用 winId()
+    // 强制创建 HWND。构造期创建原生窗口会同步派发 Windows 事件。
+    window->setWindowFlag(Qt::WindowTransparentForInput, enabled);
 #ifdef Q_OS_WIN
     if (!window->isWindow() || QGuiApplication::platformName() != QStringLiteral("windows")) {
         return true;
     }
-    HWND handle = reinterpret_cast<HWND>(window->winId());
+    const WId nativeId = window->internalWinId();
+    if (nativeId == 0) return true;
+    HWND handle = reinterpret_cast<HWND>(nativeId);
     SetLastError(ERROR_SUCCESS);
     LONG_PTR style = GetWindowLongPtrW(handle, GWL_EXSTYLE);
     if (style == 0 && GetLastError() != ERROR_SUCCESS) {
@@ -79,7 +84,11 @@ bool DesktopWindowPolicy::setExcludedFromCapture(QWidget* window, bool excluded,
     if (!window->isWindow() || QGuiApplication::platformName() != QStringLiteral("windows")) {
         return true;
     }
-    const HWND handle = reinterpret_cast<HWND>(window->winId());
+    // 截图亲和性只能对已创建的 HWND 生效。此处不强制创建原生
+    // 窗口；CaptureUiController 会在 Show/WinIdChange 后再次应用。
+    const WId nativeId = window->internalWinId();
+    if (nativeId == 0) return true;
+    const HWND handle = reinterpret_cast<HWND>(nativeId);
     const DWORD affinity = excluded ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE;
     SetLastError(ERROR_SUCCESS);
     if (SetWindowDisplayAffinity(handle, affinity)) return true;

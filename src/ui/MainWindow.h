@@ -39,6 +39,7 @@ class ErrorCenter;
 class HoverRevealController;
 class InputActivityController;
 class InputActivityPanel;
+class Logger;
 class PetWindowResizeController;
 class PetAnimationPlayer;
 class PetLifecycleController;
@@ -59,7 +60,7 @@ class MainWindow final : public QMainWindow
     Q_OBJECT
 
 public:
-    explicit MainWindow(QWidget* parent = nullptr);
+    explicit MainWindow(QWidget* parent = nullptr, Logger* startupLogger = nullptr);
     ~MainWindow() override;
 
     void setChatController(ChatController* controller);
@@ -101,6 +102,7 @@ protected:
     void resizeEvent(QResizeEvent* event) override;
 
 private:
+    void logStartupStage(const QString& event, const QString& message) const;
     void createOverlayWindows();
     QWidget* createHotZone(const QString& objectName, const QSize& size);
     void repositionConversationChain();
@@ -141,6 +143,7 @@ private:
     ConversationController* conversationController_ = nullptr;
     SettingsController* settingsController_ = nullptr;
     ModelErrorPresenter errorPresenter_;
+    Logger* startupLogger_ = nullptr;
     QString conversationId_;
     QString currentRequestId_;
     bool streamingReplyStarted_ = false;
