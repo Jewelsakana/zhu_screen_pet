@@ -238,6 +238,37 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(bubble.pos() - initial, QPoint(40, 30), 1000);
     }
 
+    void attachmentBatchDefersRepositionUntilAllWindowsAreRegistered()
+    {
+        QWidget anchor;
+        QWidget first;
+        QWidget second;
+        anchor.resize(200, 200);
+        first.resize(100, 80);
+        second.resize(120, 90);
+        anchor.move(300, 240);
+        anchor.show();
+        first.show();
+        second.show();
+        QTest::qWait(20);
+
+        WindowAttachmentManager manager;
+        QSignalSpy positionedSpy(&manager,
+                                 &WindowAttachmentManager::attachmentPositioned);
+        manager.beginUpdate();
+        manager.setAnchor(&anchor);
+        manager.attach(&first,
+                       {AttachmentSide::Left, AttachmentAlignment::Center, 10});
+        manager.attach(&second,
+                       {AttachmentSide::Right, AttachmentAlignment::Center, 10});
+        QCOMPARE(positionedSpy.count(), 0);
+
+        manager.endUpdate();
+        QCOMPARE(positionedSpy.count(), 2);
+        QVERIFY(first.pos() != QPoint(0, 0));
+        QVERIFY(second.pos() != QPoint(0, 0));
+    }
+
     void desktopWindowPolicyAppliesTransparentOverlayFlags()
     {
         QWidget overlay;

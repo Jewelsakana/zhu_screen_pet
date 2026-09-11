@@ -219,8 +219,8 @@ private slots:
         QCOMPARE(config.normalized().maxReplyTokens, 1234);
         QVERIFY(config.systemInstruction().contains(QStringLiteral("小猫")));
         QVERIFY(config.systemInstruction().contains(config.userAddress));
-        QVERIFY(config.systemInstruction().contains(QStringLiteral("积极发现")));
-        QVERIFY(config.proactivityInstruction().contains(QStringLiteral("主动")));
+        QVERIFY(!config.proactivityInstruction().isEmpty());
+        QVERIFY(config.systemInstruction().contains(config.proactivityInstruction()));
         config.proactiveLevel = 4;
         QVERIFY(!config.validate(&errorMessage));
     }

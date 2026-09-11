@@ -511,7 +511,8 @@ private slots:
         QCOMPARE(static_cast<int>(context.size()), 4);
         QCOMPARE(context.at(0).role, MessageRole::System);
         QVERIFY(context.at(0).content.contains(QStringLiteral("团子")));
-        QVERIFY(context.at(0).content.contains(QStringLiteral("相关建议")));
+        QVERIFY(!persona.proactivityInstruction().isEmpty());
+        QVERIFY(context.at(0).content.contains(persona.proactivityInstruction()));
         QCOMPARE(context.at(1).content, QStringLiteral("第一轮"));
         QCOMPARE(context.at(2).content, QStringLiteral("第一轮回复"));
         QCOMPARE(context.at(3).content, QStringLiteral("第二轮"));

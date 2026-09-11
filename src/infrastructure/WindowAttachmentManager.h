@@ -1,8 +1,9 @@
 #pragma once
 
-#include <QList>
 #include <QObject>
 #include <QPointer>
+
+#include <vector>
 
 #include "infrastructure/WindowPlacement.h"
 
@@ -26,6 +27,10 @@ class WindowAttachmentManager final : public QObject
 public:
     explicit WindowAttachmentManager(QObject* parent = nullptr);
 
+    /** 批量更新附属窗口时暂停重定位，避免构造阶段触发同步窗口事件。 */
+    void beginUpdate();
+    /** 结束批量更新；最外层更新结束后只执行一次重定位。 */
+    void endUpdate();
     /** 设置作为定位中心的窗口；传入 nullptr 会停止自动跟随。 */
     void setAnchor(QWidget* anchor);
     /** 添加或更新一个附属窗口。窗口所有权仍属于调用方。 */
@@ -50,7 +55,9 @@ private:
     };
 
     QPointer<QWidget> anchor_;
-    QList<Attachment> attachments_;
+    std::vector<Attachment> attachments_;
+    int updateDepth_ = 0;
+    bool repositionPending_ = false;
     bool repositioning_ = false;
 };
 

@@ -198,6 +198,7 @@ void MainWindow::createOverlayWindows()
         captureUiController_->registerWindow(window);
     }
     attachments_ = new WindowAttachmentManager(this);
+    attachments_->beginUpdate();
     attachments_->setAnchor(this);
     connect(attachments_, &WindowAttachmentManager::attachmentPositioned,
             replyBubble_, [this](QWidget* window, AttachmentSide actualSide) {
@@ -210,6 +211,7 @@ void MainWindow::createOverlayWindows()
     attachments_->attach(inputHotZone_, {AttachmentSide::Below, AttachmentAlignment::Center, 3});
     attachments_->attach(replyBubble_, {AttachmentSide::Left, AttachmentAlignment::Center, 14});
     attachments_->attach(errorBanner_, {AttachmentSide::Above, AttachmentAlignment::Center, 12});
+    attachments_->endUpdate();
     actionReveal_ = new HoverRevealController(this);
     inputReveal_ = new HoverRevealController(this);
     actionReveal_->bind(actionPanel_, actionHotZone_);
@@ -584,6 +586,7 @@ void MainWindow::applyWindowScale()
     actionHotZone_->setFixedSize(metrics.scaled(44), metrics.scaled(220));
     inputHotZone_->setFixedSize(metrics.scaled(420), metrics.scaled(44));
 
+    attachments_->beginUpdate();
     attachments_->attach(actionPanel_, {AttachmentSide::Right,
         AttachmentAlignment::Center, metrics.scaled(12)});
     attachments_->attach(actionHotZone_, {AttachmentSide::Right,
@@ -596,6 +599,7 @@ void MainWindow::applyWindowScale()
         AttachmentAlignment::Center, metrics.scaled(14)});
     attachments_->attach(errorBanner_, {AttachmentSide::Above,
         AttachmentAlignment::Center, metrics.scaled(12)});
+    attachments_->endUpdate();
     if (!resizeController_->isResizing()) {
         move(WindowPlacement::clamp(available, frameGeometry().size(), frameGeometry().topLeft()));
     }

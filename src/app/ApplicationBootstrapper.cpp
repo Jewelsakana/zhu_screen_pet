@@ -269,7 +269,11 @@ bool ApplicationBootstrapper::initialize(AppError* error)
                 }
             });
 
+    logger_.info(QStringLiteral("bootstrap"), QStringLiteral("main_window_create_started"),
+                 QStringLiteral("creating main and attached windows"));
     window_ = std::make_unique<MainWindow>();
+    logger_.info(QStringLiteral("bootstrap"), QStringLiteral("main_window_create_completed"),
+                 QStringLiteral("main and attached windows created"));
     window_->setCaptureDirectory(paths_.captureDirectory());
     window_->setModelErrorMessages(modelErrorMessages_);
     window_->setErrorCenter(&errorCenter_);
@@ -309,6 +313,8 @@ bool ApplicationBootstrapper::initialize(AppError* error)
                         technical, QStringLiteral("CONFIG_SAVE"));
     }
     initialized_ = true;
+    logger_.info(QStringLiteral("bootstrap"), QStringLiteral("initialized"),
+                 QStringLiteral("application services initialized"));
     return true;
 }
 
@@ -320,8 +326,14 @@ int ApplicationBootstrapper::run()
         logger_.warning(QStringLiteral("activity"),
                         QStringLiteral("global_input_monitor_unavailable"), activityError,
                         QStringLiteral("INPUT_MONITOR"));
+    } else {
+        logger_.info(QStringLiteral("activity"),
+                     QStringLiteral("global_input_monitor_started"),
+                     QStringLiteral("keyboard and mouse click monitoring started"));
     }
     if (!settings_->value(QStringLiteral("onboarding/completed"), false).toBool()) {
+        logger_.info(QStringLiteral("bootstrap"), QStringLiteral("onboarding_started"),
+                     QStringLiteral("showing first-run wizard"));
         FirstRunWizard wizard(settingsController_.get());
         if (wizard.exec() == QDialog::Accepted) {
             settings_->setValue(QStringLiteral("onboarding/completed"), true);
@@ -336,8 +348,12 @@ int ApplicationBootstrapper::run()
             }
         }
     }
+    logger_.info(QStringLiteral("bootstrap"), QStringLiteral("pet_shell_show_started"),
+                 QStringLiteral("showing main pet shell"));
     window_->showPetShell();
     trayController_->show();
+    logger_.info(QStringLiteral("bootstrap"), QStringLiteral("event_loop_started"),
+                 QStringLiteral("entering application event loop"));
     // 首次创建透明气泡必须等 Windows/Qt 完成顶层窗口的样式和透明合成，
     // 否则启动问候的第一帧可能短暂显示成未裁剪的方形背景。
     QTimer::singleShot(0, this, [this]() {
